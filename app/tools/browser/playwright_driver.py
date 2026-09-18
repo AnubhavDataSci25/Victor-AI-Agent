@@ -303,13 +303,37 @@ class PlaywrightBrowserDriver:
         """Closes a specific tab by index, or the active tab if None."""
         async with self._lock:
             await self._ensure_browser()
+            if not self.context:
+                return False
             pages = [p for p in self.context.pages if not p.is_closed()]
             if not pages:
                 return False
-            target = pages[index] if index is not None and 0 <= index < len(pages) else (self.page or pages[-1])
-            await target.close()
-            remaining = [p for p in self.context.pages if not p.is_closed()]
+
+            # Identify target tab
+            if index is not None and 0 <= index < len(pages):
+                target = pages[index]
+            else:
+                target = self.page if (self.page and not self.page.is_closed()) else pages[-1]
+
+            # Protect Victor UI page from being closed
+            if _is_victor_ui(target):
+                logger.warning("Prevented closing Victor UI tab.")
+                return False
+
+            try:
+                await target.close()
+            except Exception as close_err:
+                logger.debug(f"Note during tab close: {close_err}")
+
+            remaining = [p for p in self.context.pages if not p.is_closed() and not _is_victor_ui(p)]
             self.page = remaining[-1] if remaining else None
+            return True
+
+    async def close_browser(self) -> bool:
+        """Terminates the entire browser instance and resets all internal references."""
+        async with self._lock:
+            logger.info("Terminating Playwright Browser instance...")
+            await self._cleanup_references()
             return True
 
     async def get_active_url(self) -> str | None:
@@ -326,6 +350,14 @@ class PlaywrightBrowserDriver:
         """Safely cleans up internal Playwright references."""
         try:
             if self._is_cdp:
+                if self.context:
+                    # In CDP mode, close user tabs (except Victor UI)
+                    for p in list(self.context.pages):
+                        if not p.is_closed() and not _is_victor_ui(p):
+                            try:
+                                await p.close()
+                            except Exception:
+                                pass
                 if self.browser:
                     await self.browser.close()
             else:
@@ -350,6 +382,4 @@ class PlaywrightBrowserDriver:
 
     async def stop(self):
         """Cleans up the browser lifecycle."""
-        async with self._lock:
-            logger.info("Stopping Playwright Browser instance...")
-            await self._cleanup_references()
+        await self.close_browser()

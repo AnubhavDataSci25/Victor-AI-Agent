@@ -23,12 +23,18 @@ def build_tool_registry() -> ToolRegistry:
     try:
         from app.tools.browser.tool import (
             BrowserClickElementTool,
+            BrowserCloseTabTool,
+            BrowserCloseTool,
+            BrowserOpenTabTool,
             BrowserOpenUrlTool,
             BrowserSearchWebTool,
         )
         registry.register(BrowserSearchWebTool())
         registry.register(BrowserOpenUrlTool())
         registry.register(BrowserClickElementTool())
+        registry.register(BrowserOpenTabTool())
+        registry.register(BrowserCloseTabTool())
+        registry.register(BrowserCloseTool())
         logger.info("Registered browser tools.")
     except Exception as e:
         logger.warning(f"Browser tools unavailable: {e}")

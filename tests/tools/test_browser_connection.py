@@ -7,9 +7,13 @@ import pytest
 from app.tools.browser.playwright_driver import PlaywrightBrowserDriver
 from app.tools.browser.tool import (
     BrowserClickElementTool,
+    BrowserCloseTabTool,
+    BrowserCloseTool,
+    BrowserOpenTabTool,
     BrowserOpenUrlTool,
     BrowserSearchWebTool,
 )
+from app.tools.permissions import PermissionLevel
 from app.tools.music.spotify_provider import SpotifyProvider
 from app.tools.music.youtube_provider import YouTubeMusicProvider
 
@@ -77,6 +81,55 @@ async def test_browser_tools_execution():
     search_tool = BrowserSearchWebTool()
     search_res = await search_tool.execute({"query": "python"})
     assert "[SYSTEM SECURITY WARNING" in search_res
+
+    await driver.stop()
+
+
+@pytest.mark.asyncio
+async def test_tab_and_window_management_tools():
+    """Verify BrowserOpenTabTool, BrowserCloseTabTool, and BrowserCloseTool safety flow and lifecycle."""
+    driver = PlaywrightBrowserDriver()
+
+    # 1. Test BrowserOpenTabTool (SAFE permission, instant execution)
+    open_tab_tool = BrowserOpenTabTool()
+    assert open_tab_tool.permission_level == PermissionLevel.SAFE
+    open_res = await open_tab_tool.execute({"url": "about:blank"})
+    assert "Successfully opened new browser tab" in open_res
+
+    # Check tab count increased
+    pages = await driver.get_pages()
+    assert len(pages) >= 2
+
+    # 2. Test BrowserCloseTabTool: Confirmation required flow (user_confirmed=False)
+    close_tab_tool = BrowserCloseTabTool()
+    assert close_tab_tool.permission_level == PermissionLevel.HIGH
+    unconfirmed_res = await close_tab_tool.execute({"user_confirmed": False})
+    assert "CONFIRMATION REQUIRED" in unconfirmed_res
+
+    # Ensure tab was NOT closed when unconfirmed
+    pages_after_unconfirmed = await driver.get_pages()
+    assert len(pages_after_unconfirmed) == len(pages)
+
+    # 3. Test BrowserCloseTabTool: Confirmed execution (user_confirmed=True)
+    confirmed_res = await close_tab_tool.execute({"user_confirmed": True})
+    assert "Active browser tab has been successfully closed" in confirmed_res
+
+    # 4. Test BrowserCloseTool: Confirmation required flow (user_confirmed=False)
+    close_browser_tool = BrowserCloseTool()
+    assert close_browser_tool.permission_level == PermissionLevel.HIGH
+    unconfirmed_close = await close_browser_tool.execute({"user_confirmed": False})
+    assert "CONFIRMATION REQUIRED" in unconfirmed_close
+
+    # 5. Test BrowserCloseTool: Confirmed execution (user_confirmed=True)
+    confirmed_close = await close_browser_tool.execute({"user_confirmed": True})
+    assert "Browser instance and all open tabs have been successfully closed" in confirmed_close
+    assert driver.page is None
+    assert driver.context is None
+
+    # 6. Verify graceful recovery: requesting get_page after browser close re-launches cleanly
+    fresh_page = await driver.get_page()
+    assert fresh_page is not None
+    assert not fresh_page.is_closed()
 
     await driver.stop()
 
