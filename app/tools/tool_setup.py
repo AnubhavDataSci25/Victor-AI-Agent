@@ -1,0 +1,118 @@
+"""
+Victor 2.0 tool registration.
+
+Assembles the ToolRegistry with all v2 BaseTool instances. This
+replaces the role of factory.py (which imports v1-only classes) for
+the Gemini Live API path.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from app.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
+
+
+def build_tool_registry() -> ToolRegistry:
+    """Create and populate a ToolRegistry with all Victor 2.0 tools."""
+    registry = ToolRegistry()
+
+    # --- Browser Tools ---
+    try:
+        from app.tools.browser.tool import (
+            BrowserClickElementTool,
+            BrowserOpenUrlTool,
+            BrowserSearchWebTool,
+        )
+        registry.register(BrowserSearchWebTool())
+        registry.register(BrowserOpenUrlTool())
+        registry.register(BrowserClickElementTool())
+        logger.info("Registered browser tools.")
+    except Exception as e:
+        logger.warning(f"Browser tools unavailable: {e}")
+
+    # --- Computer / OS Automation Tools ---
+    try:
+        from app.tools.computer.tool import (
+            ComputerCloseApplicationTool,
+            ComputerOpenApplicationTool,
+            ComputerTakeScreenshotTool,
+        )
+        registry.register(ComputerOpenApplicationTool())
+        registry.register(ComputerCloseApplicationTool())
+        registry.register(ComputerTakeScreenshotTool())
+        logger.info("Registered computer tools.")
+    except Exception as e:
+        logger.warning(f"Computer tools unavailable: {e}")
+
+    # --- System Tools ---
+    try:
+        from app.tools.system.tool import (
+            SystemGetInfoTool,
+            SystemGetTimeTool,
+            SystemLockVictorTool,
+            SystemLockWindowsTool,
+            SystemVolumeTool,
+        )
+        registry.register(SystemGetTimeTool())
+        registry.register(SystemGetInfoTool())
+        registry.register(SystemVolumeTool())
+        registry.register(SystemLockWindowsTool())
+        registry.register(SystemLockVictorTool())
+        logger.info("Registered system tools.")
+    except Exception as e:
+        logger.warning(f"System tools unavailable: {e}")
+
+    # --- Music Tools ---
+    try:
+        from app.tools.music.tool import (
+            MusicNextTrackTool,
+            MusicPauseTool,
+            MusicPlayTool,
+            MusicPreviousTrackTool,
+            MusicResumeTool,
+            MusicStopTool,
+        )
+        registry.register(MusicPlayTool())
+        registry.register(MusicPauseTool())
+        registry.register(MusicResumeTool())
+        registry.register(MusicStopTool())
+        registry.register(MusicNextTrackTool())
+        registry.register(MusicPreviousTrackTool())
+        logger.info("Registered music tools.")
+    except Exception as e:
+        logger.warning(f"Music tools unavailable: {e}")
+
+    # --- Email Tools ---
+    try:
+        from app.tools.email.tool import (
+            EmailGetUnreadSummaryTool,
+            EmailSearchMessagesTool,
+        )
+        registry.register(EmailGetUnreadSummaryTool())
+        registry.register(EmailSearchMessagesTool())
+        logger.info("Registered email tools.")
+    except Exception as e:
+        logger.warning(f"Email tools unavailable: {e}")
+
+    # --- Web App Tools ---
+    try:
+        from app.tools.web_apps.tool import (
+            WebAppOpenChatGPTTool,
+            WebAppOpenGeminiTool,
+            WebAppWikipediaTool,
+            WebAppYouTubeTool,
+        )
+        registry.register(WebAppYouTubeTool())
+        registry.register(WebAppWikipediaTool())
+        registry.register(WebAppOpenChatGPTTool())
+        registry.register(WebAppOpenGeminiTool())
+        logger.info("Registered web app tools.")
+    except Exception as e:
+        logger.warning(f"Web app tools unavailable: {e}")
+
+    tool_count = len(registry.list_tools())
+    logger.info(f"Tool registry built with {tool_count} tools.")
+    return registry

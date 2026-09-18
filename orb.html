@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Victor</title>
+<style>
+  /*
+   * Ported verbatim (colors, sizes, positions) from the prototype's
+   * client/src/index.css - see PORTING_NOTES at the bottom of the
+   * <script> block for what changed vs. what didn't.
+   */
+  :root { background: #000; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; min-width: 100%; min-height: 100%; height: 100%; margin: 0; background: #000; overflow: hidden; }
+  body { background: #000; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+  .assistant-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    background: #000;
+  }
+
+  .particle-orb-stage { width: 100%; height: 100%; display: grid; place-items: center; background: #000; }
+  .particle-orb-stage canvas {
+    display: block;
+    width: min(64vw, 660px) !important;
+    height: min(64vw, 660px) !important;
+    max-width: 86vh !important;
+    max-height: 86vh !important;
+  }
+
+  .transcript-panel {
+    position: fixed;
+    right: clamp(18px, 4vw, 62px);
+    bottom: clamp(18px, 5vh, 52px);
+    width: min(350px, calc(100vw - 36px));
+    max-height: min(300px, 34vh);
+    padding: 14px 15px 12px;
+    border: 1px solid rgba(84, 132, 188, 0.28);
+    border-radius: 8px;
+    background: linear-gradient(145deg, rgba(5, 13, 24, 0.94), rgba(1, 4, 9, 0.88));
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(134, 194, 255, 0.06);
+    color: #a9c6e4;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .transcript-panel__topline { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding-bottom: 10px; border-bottom: 1px solid rgba(84, 132, 188, 0.16); }
+  .transcript-panel__eyebrow { color: #70a9df; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; }
+  .transcript-panel__count { color: #5d7896; font-size: 10px; letter-spacing: 0.06em; }
+  .transcript-panel__stream { flex: 1 1 auto; min-height: 0; max-height: 240px; overflow: auto; padding: 10px 4px 0 0; scrollbar-width: thin; scrollbar-color: rgba(104, 161, 218, 0.34) transparent; }
+  .transcript-panel__empty { margin: 5px 0 4px; color: #55708b; font-size: 12px; line-height: 1.5; }
+  .transcript-entry { padding: 7px 0 8px; border-bottom: 1px solid rgba(84, 132, 188, 0.11); }
+  .transcript-entry:last-child { border-bottom: 0; padding-bottom: 3px; }
+  .transcript-entry__meta { margin-bottom: 4px; color: #4e84b8; font-size: 9px; font-weight: 700; letter-spacing: 0.16em; }
+  .transcript-entry--assistant .transcript-entry__meta { color: #68c5ed; }
+  .transcript-entry__text { margin: 0; max-width: 100%; max-height: 7.25em; overflow: auto; color: #c0d5ea; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; scrollbar-width: thin; scrollbar-color: rgba(104, 161, 218, 0.28) transparent; }
+  .transcript-entry--assistant .transcript-entry__text { color: #d3e8f5; }
+
+  @media (max-width: 700px) {
+    .particle-orb-stage canvas { width: min(88vw, 570px) !important; height: min(88vw, 570px) !important; max-width: 88vw !important; max-height: 88vw !important; }
+    .transcript-panel { right: 18px; left: 18px; bottom: 18px; width: auto; max-height: 28vh; }
+    .transcript-panel__stream { max-height: 20vh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) { .particle-orb-stage canvas { opacity: 0.82; } }
+</style>
+</head>
+<body>
+
+  <main class="assistant-shell">
+    <div class="particle-orb-stage" id="orbStage" aria-label="Victor particle orb" role="img"></div>
+
+    <aside class="transcript-panel" aria-label="Conversation transcript">
+      <div class="transcript-panel__topline">
+        <span class="transcript-panel__eyebrow">LIVE TRANSCRIPT</span>
+        <span class="transcript-panel__count" id="transcriptCount">standby</span>
+      </div>
+      <div class="transcript-panel__stream" id="transcriptStream" aria-live="polite" aria-relevant="additions text">
+        <p class="transcript-panel__empty" id="transcriptEmpty">Conversation will appear here.</p>
+      </div>
+    </aside>
+  </main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/*
+ * VICTOR PARTICLE ORB - ported from the React/Three.js prototype
+ * (client/src/components/ParticleOrb.tsx + TranscriptPanel.tsx).
+ *
+ * This is a faithful behavioral port, not a redesign: the shader
+ * source, the PROFILES table, the particle geometry math, the mic
+ * pipeline, the state machine, the hidden window.VictorOrb API, and
+ * routeOrbSocketEvent()'s message-normalization rules are unchanged
+ * from the original. What changed is only the hosting shell, because
+ * this project has no Node/React/Vite build step - see PORTING_NOTES
+ * at the end of this block for the specific, deliberate differences.
+ */
+
+(function () {
+  "use strict";
+
+  /* ---- Shaders (verbatim from ParticleOrb.tsx) ------------------- */
+
+  var vertexShader = [
+    "attribute float aSeed;",
+    "attribute float aRadius;",
+    "attribute float aSize;",
+    "attribute float aCrest;",
+    "attribute float aHalo;",
+    "",
+    "uniform float uTime;",
+    "uniform float uEnergy;",
+    "uniform float uBrightness;",
+    "uniform float uSpeed;",
+    "uniform float uNoise;",
+    "uniform float uPulse;",
+    "uniform float uAudio;",
+    "uniform float uLow;",
+    "uniform float uMid;",
+    "uniform float uHigh;",
+    "uniform float uHalo;",
+    "uniform float uDirection;",
+    "uniform float uConnection;",
+    "uniform float uConnectionPulse;",
+    "uniform float uHeartbeatPulse;",
+    "uniform float uSpeaking;",
+    "uniform float uListening;",
+    "varying float vFlow;",
+    "varying float vDepth;",
+    "varying float vLimb;",
+    "varying float vConnectionPulse;",
+    "varying float vVocalBeat;",
+    "varying float vListenBeat;",
+    "",
+    "varying float vRadius;",
+    "varying float vCrest;",
+    "varying float vBrightness;",
+    "varying float vAlpha;",
+    "varying float vHalo;",
+    "",
+    "float hash(float n) { return fract(sin(n) * 43758.5453123); }",
+    "",
+    "vec3 curlFlow(vec3 p, float t) {",
+    "  float x = sin(p.y * 4.7 + t) - cos(p.z * 3.9 - t * 0.83);",
+    "  float y = sin(p.z * 4.1 - t * 0.71) - cos(p.x * 4.3 + t);",
+    "  float z = sin(p.x * 3.7 + t * 0.64) - cos(p.y * 4.9 - t * 0.77);",
+    "  return normalize(vec3(x, y, z));",
+    "}",
+    "",
+    "void main() {",
+    "  float time = uTime * (0.32 + uSpeed * 0.68);",
+    "  float breathing = sin(uTime * (0.38 + uPulse * 0.12)) * (0.010 + uPulse * 0.022);",
+    "  float speech = (uAudio * 0.68 + uLow * 0.72) * (0.018 + uPulse * 0.048);",
+    "  vec3 p = position;",
+    "  vec3 flow = curlFlow(p * (1.8 + aSeed * 0.8), time + aSeed * 6.283);",
+    "  vec3 tangent = normalize(vec3(-p.y, p.x, sin(p.z * 4.0 + time)) + vec3(0.001));",
+    "  float shellWeight = smoothstep(0.36, 0.96, aRadius);",
+    "  p += flow * (0.006 + (uNoise + uMid * 0.46) * 0.035) * (0.35 + aRadius) * sin(time * 1.2 + aSeed * 13.0);",
+    "  p += tangent * (uSpeed + uMid * 0.68) * (0.004 + aRadius * 0.012);",
+    "  p += normalize(p) * sin(time * 2.2 + aSeed * 19.0) * uEnergy * (0.003 + shellWeight * 0.013);",
+    "  float reconnectionLift = uConnectionPulse * shellWeight * (0.004 + aSeed * 0.014) * sin(aSeed * 40.0 + time * 2.8);",
+    "  float heartbeatLift = uHeartbeatPulse * shellWeight * (0.002 + aSeed * 0.006);",
+    "  float vocalBeat = uSpeaking * (0.5 + 0.5 * sin(uTime * 5.8 + aSeed * 10.0)) * (0.30 + uAudio * 0.70);",
+    "  float vocalLift = vocalBeat * shellWeight * (0.004 + aSeed * 0.008);",
+    "  float listenBeat = uListening * (0.5 + 0.5 * sin(uTime * 1.45 + aSeed * 2.2)) * (0.55 + uAudio * 0.45);",
+    "  float listenDrift = listenBeat * shellWeight * (0.0015 + aSeed * 0.0025);",
+    "  p += normalize(p) * (reconnectionLift + heartbeatLift + vocalLift - listenDrift);",
+    "  p += flow * (vocalBeat * 0.006 + listenBeat * shellWeight * 0.003);",
+    "  p.x += uDirection * shellWeight * (0.014 + uEnergy * 0.022) * sin(time + aSeed * 9.0);",
+    "  p *= 1.0 + breathing + speech - listenBeat * 0.004;",
+    "",
+    "  vec4 modelPosition = modelMatrix * vec4(p, 1.0);",
+    "  vec4 mvPosition = viewMatrix * modelPosition;",
+    "  float perspectiveSize = 1.0 / max(0.42, -mvPosition.z);",
+    "  float size = mix(1.55, 4.65, aSize) * (0.68 + shellWeight * 0.88 + uEnergy * 0.38 + uAudio * 0.26 + vocalBeat * 0.18 + listenBeat * 0.08);",
+    "  if (aHalo > 0.5) size *= 3.8 + uHalo * 5.0;",
+    "  gl_PointSize = size * perspectiveSize * (aHalo > 0.5 ? 4.0 : 2.25);",
+    "  gl_Position = projectionMatrix * mvPosition;",
+    "",
+    "  vRadius = aRadius;",
+    "  vCrest = max(aCrest, step(0.994 - uHigh * (0.12 * (1.0 - uListening * 0.90)), fract(aSeed * 23.17 + sin(time * 0.7) * 0.5)));",
+    "  vBrightness = uBrightness * (0.82 + uConnection * 0.18);",
+    "  vHalo = aHalo;",
+    "  vAlpha = mix(0.06, 1.0, shellWeight) * (0.68 + uEnergy * 0.42);",
+    "  vAlpha *= mix(0.13, 1.0, smoothstep(0.11, 0.39, aRadius));",
+    "  vFlow = pow(max(0.0, sin(atan(p.z, p.x) * 6.0 + p.y * 7.4 - time * 1.72 + flow.y * 2.5)), 5.0);",
+    "  vDepth = smoothstep(-0.82, 0.92, p.z);",
+    "  vLimb = 1.0 - pow(abs(normalize(p).z), 1.85);",
+    "  vConnectionPulse = uConnectionPulse * (0.22 + shellWeight * 0.78);",
+    "  vVocalBeat = vocalBeat * (0.22 + shellWeight * 0.78);",
+    "  vListenBeat = listenBeat * (0.22 + shellWeight * 0.78);",
+    "}",
+  ].join("\n");
+
+  var fragmentShader = [
+    "precision highp float;",
+    "",
+    "uniform float uWarning;",
+    "varying float vFlow;",
+    "varying float vDepth;",
+    "varying float vLimb;",
+    "varying float vConnectionPulse;",
+    "varying float vVocalBeat;",
+    "varying float vListenBeat;",
+    "uniform float uAudio;",
+    "uniform float uHalo;",
+    "uniform float uConnection;",
+    "uniform float uConnectionPulse;",
+    "uniform float uHeartbeatPulse;",
+    "uniform float uSpeaking;",
+    "uniform float uListening;",
+    "",
+    "varying float vRadius;",
+    "varying float vCrest;",
+    "varying float vBrightness;",
+    "varying float vAlpha;",
+    "varying float vHalo;",
+    "",
+    "void main() {",
+    "  vec2 point = gl_PointCoord - 0.5;",
+    "  float distanceToCenter = length(point);",
+    "  float particle = 1.0 - smoothstep(0.18, 0.5, distanceToCenter);",
+    "  float softParticle = exp(-distanceToCenter * distanceToCenter * (vHalo > 0.5 ? 4.2 : 18.0));",
+    "  float edge = smoothstep(0.46, 0.96, vRadius);",
+    "  vec3 core = vec3(0.015, 0.075, 0.14);",
+    "  vec3 deepBlue = vec3(0.02, 0.18, 0.34);",
+    "  vec3 electric = vec3(0.0, 0.52, 0.92);",
+    "  vec3 cyan = vec3(0.40, 0.85, 1.0);",
+    "  vec3 warning = vec3(1.0, 0.14, 0.36);",
+    "  vec3 color = mix(core, deepBlue, smoothstep(0.20, 0.64, vRadius));",
+    "  color = mix(color, electric, 0.10 + edge * (0.38 + vBrightness * 0.34));",
+    "  color = mix(color, cyan, vCrest * edge * 0.68 + vFlow * edge * 0.16);",
+    "  color = mix(color, warning, uWarning * (0.30 + 0.70 * edge));",
+    "  color += electric * vFlow * edge * (0.34 + vBrightness * 0.35);",
+    "  color += cyan * vCrest * edge * (0.24 + uAudio * 0.28);",
+    "  vec3 mutedConnection = vec3(0.42, 0.55, 0.72);",
+    "  float connectionSignal = smoothstep(0.18, 0.92, uConnection);",
+    "  color = mix(color * mutedConnection, color, connectionSignal);",
+    "  color += cyan * vConnectionPulse * (0.16 + edge * 0.42);",
+    "  color += electric * uHeartbeatPulse * (0.06 + edge * 0.18);",
+    "  vec3 speakingCyan = vec3(0.26, 0.96, 1.0);",
+    "  color = mix(color, speakingCyan, uSpeaking * (0.10 + vVocalBeat * 0.18));",
+    "  color += speakingCyan * vVocalBeat * (0.12 + edge * 0.24);",
+    "  vec3 listeningIndigo = vec3(0.16, 0.22, 0.68);",
+    "  color = mix(color, listeningIndigo, uListening * (0.22 + edge * 0.16));",
+    "  color += listeningIndigo * vListenBeat * (0.05 + edge * 0.11);",
+    "  float depthFade = mix(0.34, 1.0, vDepth);",
+    "  float limbFade = mix(0.16, 1.0, vLimb);",
+    "  float alpha = (vHalo > 0.5 ? softParticle * uHalo * 0.045 : particle * vAlpha * depthFade * limbFade) * (0.74 + vBrightness * 0.72);",
+    "  if (alpha < 0.006) discard;",
+    "  gl_FragColor = vec4(color * alpha * (0.72 + vBrightness * 0.75), alpha);",
+    "}",
+  ].join("\n");
+
+  /* ---- State profiles (verbatim) ---------------------------------- */
+
+  var PROFILES = {
+    idle:           { energy: 0.32, brightness: 0.68, speed: 0.10, noise: 0.15, pulse: 0.22, halo: 0.38, warning: 0, direction: 0.0 },
+    wake:           { energy: 1.0,  brightness: 1.0,  speed: 1.6,  noise: 0.82, pulse: 1.25, halo: 0.96, warning: 0, direction: 0.42 },
+    listening:      { energy: 0.6,  brightness: 0.68, speed: 0.45, noise: 0.43, pulse: 0.76, halo: 0.56, warning: 0, direction: 0.1 },
+    thinking:       { energy: 0.78, brightness: 0.76, speed: 0.70, noise: 0.57, pulse: 0.55, halo: 0.67, warning: 0, direction: -0.08 },
+    processing:     { energy: 0.86, brightness: 0.84, speed: 1.08, noise: 0.75, pulse: 0.69, halo: 0.79, warning: 0, direction: 0.23 },
+    executing:      { energy: 0.92, brightness: 0.91, speed: 1.30, noise: 0.64, pulse: 0.72, halo: 0.83, warning: 0, direction: 0.82 },
+    speaking:       { energy: 0.76, brightness: 0.87, speed: 0.58, noise: 0.48, pulse: 1.18, halo: 0.79, warning: 0, direction: 0.05 },
+    authentication: { energy: 0.42, brightness: 0.55, speed: 0.22, noise: 0.18, pulse: 0.64, halo: 0.44, warning: 0, direction: 0.0 },
+    error:          { energy: 0.48, brightness: 0.67, speed: 0.76, noise: 0.92, pulse: 0.95, halo: 0.64, warning: 1, direction: -0.35 },
+    offline:        { energy: 0.06, brightness: 0.13, speed: 0.025, noise: 0.04, pulse: 0.06, halo: 0.05, warning: 0, direction: 0.0 },
+  };
+
+  /* ---- Particle geometry (verbatim math) -------------------------- */
+
+  function chooseParticleCount() {
+    var cores = navigator.hardwareConcurrency || 6;
+    var pixelRatio = window.devicePixelRatio || 1;
+    if (Math.min(window.innerWidth, window.innerHeight) < 700) return 26000;
+    if (cores >= 10 && pixelRatio <= 1.5) return 112000;
+    if (cores >= 6) return 78000;
+    return 42000;
+  }
+
+  function createParticleGeometry(count) {
+    var positions = new Float32Array(count * 3);
+    var seeds = new Float32Array(count);
+    var radii = new Float32Array(count);
+    var sizes = new Float32Array(count);
+    var crests = new Float32Array(count);
+    var halos = new Float32Array(count);
+
+    for (var index = 0; index < count; index += 1) {
+      var u = Math.random();
+      var v = Math.random();
+      var theta = 2 * Math.PI * u;
+      var phi = Math.acos(2 * v - 1);
+      var shellChance = Math.random();
+      var radius = shellChance < 0.58
+        ? 0.70 + Math.pow(Math.random(), 0.58) * 0.26
+        : 0.12 + Math.pow(Math.random(), 0.74) * 0.75;
+      var sinPhi = Math.sin(phi);
+      var isHalo = Math.random() < 0.006;
+      var haloRadius = isHalo ? 1.03 + Math.random() * 0.14 : radius;
+      positions[index * 3] = haloRadius * sinPhi * Math.cos(theta);
+      positions[index * 3 + 1] = haloRadius * Math.cos(phi);
+      positions[index * 3 + 2] = haloRadius * sinPhi * Math.sin(theta);
+      seeds[index] = Math.random();
+      radii[index] = Math.min(1, haloRadius);
+      sizes[index] = 0.18 + Math.random() * 0.82;
+      crests[index] = Math.random() > 0.985 ? 1 : 0;
+      halos[index] = isHalo ? 1 : 0;
+    }
+
+    var geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("aSeed", new THREE.BufferAttribute(seeds, 1));
+    geometry.setAttribute("aRadius", new THREE.BufferAttribute(radii, 1));
+    geometry.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute("aCrest", new THREE.BufferAttribute(crests, 1));
+    geometry.setAttribute("aHalo", new THREE.BufferAttribute(halos, 1));
+    return geometry;
+  }
+
+  /* ---- WebSocket message routing (verbatim rules) ------------------ */
+
+  function normalizeOrbState(value) {
+    if (typeof value !== "string") return null;
+    var normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    var stateMap = {
+      idle: "idle",
+      wake: "wake",
+      activating: "wake",
+      wake_word: "wake",
+      authentication: "authentication",
+      authenticating: "authentication",
+      authenticated: "listening",
+      verified: "listening",
+      success: "listening",
+      listening: "listening",
+      thinking: "thinking",
+      processing: "processing",
+      executing: "executing",
+      speaking: "speaking",
+      error: "error",
+      offline: "offline",
+    };
+    return stateMap[normalized] || null;
+  }
+
+  // PORTING NOTE: the original also checked `import.meta.env.VITE_VICTOR_WS_URL`,
+  // a Vite build-time env var. There is no Vite build here, so that
+  // source is dropped; the ?ws= query param and the localhost default
+  // are unchanged and cover the same real use cases (explicit URL, or
+  // local dev default).
+  function resolveWebSocketEndpoint() {
+    var queryEndpoint = new URLSearchParams(window.location.search).get("ws");
+    if (queryEndpoint) {
+      try {
+        var parsed = new URL(queryEndpoint);
+        return (parsed.protocol === "ws:" || parsed.protocol === "wss:") ? parsed.toString() : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    var localHosts = { "localhost": true, "127.0.0.1": true, "::1": true };
+    if (!window.location.hostname || localHosts[window.location.hostname]) {
+      return "ws://127.0.0.1:8000/ws/orb";
+    }
+    return null;
+  }
+
+  function getNormalizedAudioLevel(payload) {
+    var candidate = payload.level !== undefined ? payload.level : (payload.audioLevel !== undefined ? payload.audioLevel : payload.value);
+    if (typeof candidate !== "number" || !isFinite(candidate)) return null;
+    return THREE.MathUtils.clamp(candidate, 0, 1);
+  }
+
+  function isFailedTaskEvent(payload) {
+    var type = typeof payload.type === "string" ? payload.type.toLowerCase() : "";
+    var status = typeof payload.status === "string" ? payload.status.toLowerCase() : "";
+    var explicitError = { error: true, task_error: true, command_error: true, task_failed: true, command_failed: true };
+    return !!explicitError[type]
+      || ((type === "task_result" || type === "task_status" || type === "command_result")
+          && (payload.success === false || status === "failed" || status === "error"));
+  }
+
+  function routeOrbSocketEvent(payload, handlers) {
+    var type = typeof payload.type === "string" ? payload.type.toLowerCase() : "";
+    if (isFailedTaskEvent(payload)) {
+      handlers.triggerError();
+      return;
+    }
+    var transcriptType = type === "transcript" || type === "user_transcript" || type === "assistant_transcript";
+    if (transcriptType && typeof payload.text === "string") {
+      var inferredRole = type === "user_transcript" ? "user" : (type === "assistant_transcript" ? "assistant" : payload.role);
+      if (inferredRole === "user" || inferredRole === "assistant") {
+        handlers.emitTranscript({
+          role: inferredRole,
+          text: payload.text.slice(0, 800),
+          timestamp: typeof payload.timestamp === "number" ? payload.timestamp : Date.now(),
+        });
+      }
+      return;
+    }
+    var stateFromEvent = normalizeOrbState(payload.state);
+    var stateFromStatus = normalizeOrbState(payload.status);
+    var audioLevel = (type === "audio_level" || type === "audio") ? getNormalizedAudioLevel(payload) : null;
+    if (audioLevel !== null) handlers.setAudioLevel(audioLevel);
+    if (type === "wake_word" || type === "wake") {
+      handlers.simulateWakeWord();
+      return;
+    }
+    if (type === "tool_execution" && typeof payload.status === "string" && payload.status.toLowerCase() === "running") {
+      handlers.setState("executing");
+      return;
+    }
+    var nextState = stateFromEvent
+      || (type === "authentication" ? stateFromStatus : null)
+      || (type === "state_change" ? stateFromStatus : null);
+    if (nextState) handlers.setState(nextState);
+  }
+
+  window.routeOrbSocketEvent = routeOrbSocketEvent; // exposed for test harnesses, matching the original's export
+
+  /* ---- Transcript panel (vanilla port of TranscriptPanel.tsx) ------ */
+
+  var MAX_TRANSCRIPT_ENTRIES = 40;
+  var transcriptEntries = [];
+
+  function renderTranscript() {
+    var streamEl = document.getElementById("transcriptStream");
+    var countEl = document.getElementById("transcriptCount");
+    countEl.textContent = transcriptEntries.length ? (transcriptEntries.length + " events") : "standby";
+
+    streamEl.innerHTML = "";
+    if (transcriptEntries.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "transcript-panel__empty";
+      empty.textContent = "Conversation will appear here.";
+      streamEl.appendChild(empty);
+      return;
+    }
+    transcriptEntries.forEach(function (entry) {
+      var article = document.createElement("article");
+      article.className = "transcript-entry transcript-entry--" + entry.role;
+      var meta = document.createElement("div");
+      meta.className = "transcript-entry__meta";
+      meta.textContent = entry.role === "user" ? "YOU" : "VICTOR";
+      var text = document.createElement("p");
+      text.className = "transcript-entry__text";
+      text.textContent = entry.text; // textContent, never innerHTML - matches the
+                                      // original's React-text-content XSS safety
+      article.appendChild(meta);
+      article.appendChild(text);
+      streamEl.appendChild(article);
+    });
+    streamEl.scrollTop = streamEl.scrollHeight;
+  }
+
+  window.addEventListener("victor:transcript", function (event) {
+    var detail = event.detail;
+    if (!detail || (detail.role !== "user" && detail.role !== "assistant") || typeof detail.text !== "string") return;
+    var text = detail.text.trim();
+    if (!text) return;
+    transcriptEntries.push({
+      id: detail.id || (Date.now() + "-" + Math.random().toString(36).slice(2)),
+      role: detail.role,
+      text: text.slice(0, 800),
+      timestamp: detail.timestamp,
+    });
+    if (transcriptEntries.length > MAX_TRANSCRIPT_ENTRIES) {
+      transcriptEntries = transcriptEntries.slice(-MAX_TRANSCRIPT_ENTRIES);
+    }
+    renderTranscript();
+  });
+
+  /* ---- Orb (verbatim port of the ParticleOrb useEffect body) ------- */
+
+  function initOrb() {
+    var mount = document.getElementById("orbStage");
+
+    var animationFrame = 0;
+    var microphoneFrame = 0;
+    var sourceStream = null;
+    var audioContext = null;
+    var analyser = null;
+    var microphoneSource = null;
+    var captureProcessor = null;
+    var silentGain = null;
+    var currentTtsSource = null;
+    var currentTtsPlaybackId = null;
+
+    var state = {
+      current: "idle",
+      audioTarget: 0,
+      audio: 0,
+      lowTarget: 0,
+      midTarget: 0,
+      highTarget: 0,
+      low: 0,
+      mid: 0,
+      high: 0,
+      connection: 0.58,
+      connectionTarget: 0.58,
+      connectionPulse: 0,
+      heartbeatPulse: 0,
+      heartbeatNextAt: 0,
+      recoveryState: "idle",
+      errorTimer: null,
+      speaking: 0,
+      listening: 0,
+      quality: chooseParticleCount(),
+      tier: 1,
+      microphoneRequested: false,
+    };
+    var target = Object.assign({}, PROFILES.idle);
+    var visual = Object.assign({}, PROFILES.idle);
+
+    var renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: "high-performance" });
+    renderer.setClearColor(0x000000, 1);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.45));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    mount.appendChild(renderer.domElement);
+
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(34, 1, 0.1, 10);
+    camera.position.set(0, 0, 3.85);
+    var geometry = createParticleGeometry(state.quality);
+    var material = new THREE.ShaderMaterial({
+      vertexShader: vertexShader,
+      fragmentShader: fragmentShader,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uEnergy: { value: visual.energy },
+        uBrightness: { value: visual.brightness },
+        uSpeed: { value: visual.speed },
+        uNoise: { value: visual.noise },
+        uPulse: { value: visual.pulse },
+        uAudio: { value: 0 },
+        uLow: { value: 0 },
+        uMid: { value: 0 },
+        uHigh: { value: 0 },
+        uHalo: { value: visual.halo },
+        uWarning: { value: 0 },
+        uDirection: { value: 0 },
+        uConnection: { value: state.connection },
+        uConnectionPulse: { value: 0 },
+        uHeartbeatPulse: { value: 0 },
+        uSpeaking: { value: 0 },
+        uListening: { value: 0 },
+      },
+    });
+    var points = new THREE.Points(geometry, material);
+    scene.add(points);
+    var clock = new THREE.Clock();
+    var frameCount = 0;
+    var fpsWindowStart = performance.now();
+
+    function resize() {
+      var side = Math.min(window.innerWidth, window.innerHeight);
+      var size = Math.max(260, Math.min(side * 0.64, 660));
+      renderer.setSize(size, size, false);
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    function setState(nextState, fromRecovery) {
+      if (state.current === "error" && nextState !== "error" && !fromRecovery) return;
+      state.current = PROFILES[nextState] ? nextState : "idle";
+      Object.assign(target, PROFILES[state.current]);
+      if (state.current === "wake") {
+        window.setTimeout(function () {
+          if (state.current === "wake") setState("listening");
+        }, 640);
+      }
+    }
+
+    function triggerError() {
+      if (state.current !== "error") state.recoveryState = state.current;
+      if (state.errorTimer !== null) window.clearTimeout(state.errorTimer);
+      state.current = "error";
+      Object.assign(target, PROFILES.error);
+      state.errorTimer = window.setTimeout(function () {
+        state.errorTimer = null;
+        setState(state.recoveryState, true);
+      }, 5000);
+    }
+
+    function setAudioLevel(level) {
+      state.audioTarget = THREE.MathUtils.clamp(level, 0, 1);
+    }
+
+    var pendingStartTurn = false;
+    function simulateWakeWord() {
+      setState("wake");
+      startMicrophone().then(function () {
+        if (socket && socket.readyState === WebSocket.OPEN) sendBridgeMessage({ type: "start_turn" });
+        else pendingStartTurn = true;
+      }).catch(function () {
+        triggerError();
+      });
+    }
+
+    function stopMicrophone() {
+      if (microphoneFrame) cancelAnimationFrame(microphoneFrame);
+      if (captureProcessor) {
+        captureProcessor.onaudioprocess = null;
+        captureProcessor.disconnect();
+      }
+      if (microphoneSource) microphoneSource.disconnect();
+      if (silentGain) silentGain.disconnect();
+      if (sourceStream) sourceStream.getTracks().forEach(function (track) { track.stop(); });
+      if (audioContext && audioContext.state !== "closed") audioContext.close();
+      sourceStream = null;
+      audioContext = null;
+      analyser = null;
+      microphoneSource = null;
+      captureProcessor = null;
+      silentGain = null;
+      microphoneFrame = 0;
+      setAudioLevel(0);
+      state.lowTarget = 0;
+      state.midTarget = 0;
+      state.highTarget = 0;
+    }
+
+    function floatToPcm16(samples) {
+      var pcm = new Int16Array(samples.length);
+      for (var index = 0; index < samples.length; index += 1) {
+        var sample = Math.max(-1, Math.min(1, samples[index]));
+        pcm[index] = sample < 0 ? sample * 32768 : sample * 32767;
+      }
+      return pcm.buffer;
+    }
+
+    function downsampleFloat32(samples, sourceRate, targetRate) {
+      if (sourceRate === targetRate) return samples;
+      var ratio = sourceRate / targetRate;
+      var targetLength = Math.max(1, Math.round(samples.length / ratio));
+      var output = new Float32Array(targetLength);
+      for (var index = 0; index < targetLength; index += 1) {
+        var start = Math.floor(index * ratio);
+        var end = Math.min(samples.length, Math.floor((index + 1) * ratio));
+        var total = 0;
+        var count = 0;
+        for (var sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+          total += samples[sourceIndex];
+          count += 1;
+        }
+        output[index] = count ? total / count : samples[Math.min(samples.length - 1, start)] || 0;
+      }
+      return output;
+    }
+
+    function arrayBufferToBase64(buffer) {
+      var bytes = new Uint8Array(buffer);
+      var binary = "";
+      var chunkSize = 0x8000;
+      for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+      }
+      return btoa(binary);
+    }
+
+    function stopTtsPlayback(notifyServer) {
+      var playbackId = currentTtsPlaybackId;
+      currentTtsPlaybackId = null;
+      if (currentTtsSource) {
+        try { currentTtsSource.stop(); } catch (e) { /* already ended */ }
+        currentTtsSource.disconnect();
+        currentTtsSource = null;
+      }
+      if (notifyServer && playbackId !== null) sendBridgeMessage({ type: "tts_finished", id: playbackId });
+    }
+
+    function playTtsAudio(payload) {
+      stopTtsPlayback(false);
+      if (!audioContext || typeof payload.audio_wav_b64 !== "string") {
+        sendBridgeMessage({ type: "tts_finished", id: payload.id });
+        return;
+      }
+      var playbackId = payload.id;
+      currentTtsPlaybackId = playbackId;
+      audioContext.decodeAudioData(base64ToArrayBuffer(payload.audio_wav_b64)).then(function (buffer) {
+        if (currentTtsPlaybackId !== playbackId) return;
+        var source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.onended = function () {
+          if (currentTtsPlaybackId !== playbackId) return;
+          currentTtsSource = null;
+          currentTtsPlaybackId = null;
+          sendBridgeMessage({ type: "tts_finished", id: playbackId });
+        };
+        currentTtsSource = source;
+        source.start();
+      }).catch(function () {
+        if (currentTtsPlaybackId === playbackId) {
+          currentTtsPlaybackId = null;
+          sendBridgeMessage({ type: "tts_finished", id: playbackId });
+        }
+      });
+    }
+
+    function base64ToArrayBuffer(value) {
+      var binary = atob(value);
+      var bytes = new Uint8Array(binary.length);
+      for (var index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      return bytes.buffer;
+    }
+
+    function sendBridgeMessage(payload) {
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+    }
+
+    function startMicrophone() {
+      if (sourceStream) return Promise.resolve();
+      return navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+      }).then(function (stream) {
+        var context = new AudioContext();
+        return context.resume().then(function () {
+          var input = context.createMediaStreamSource(stream);
+          microphoneSource = input;
+          var nextAnalyser = context.createAnalyser();
+          nextAnalyser.fftSize = 1024;
+          nextAnalyser.smoothingTimeConstant = 0.84;
+          input.connect(nextAnalyser);
+          var samples = new Uint8Array(nextAnalyser.fftSize);
+          var frequencies = new Uint8Array(nextAnalyser.frequencyBinCount);
+          sourceStream = stream;
+          audioContext = context;
+          analyser = nextAnalyser;
+          captureProcessor = context.createScriptProcessor(2048, 1, 1);
+          silentGain = context.createGain();
+          silentGain.gain.value = 0;
+          captureProcessor.onaudioprocess = function (audioEvent) {
+            if (!sourceStream) return;
+            var samples = audioEvent.inputBuffer.getChannelData(0);
+            var normalized = downsampleFloat32(samples, context.sampleRate, 16000);
+            sendBridgeMessage({
+              type: "audio_frame",
+              sample_rate: 16000,
+              pcm16_b64: arrayBufferToBase64(floatToPcm16(normalized)),
+            });
+          };
+          input.connect(captureProcessor);
+          captureProcessor.connect(silentGain);
+          silentGain.connect(context.destination);
+          setState("listening");
+
+          function getBand(from, to) {
+            var total = 0;
+            for (var index = from; index < to; index += 1) total += frequencies[index];
+            return total / Math.max(1, to - from) / 255;
+          }
+          function sample() {
+            if (!analyser) return;
+            analyser.getByteTimeDomainData(samples);
+            analyser.getByteFrequencyData(frequencies);
+            var sum = 0;
+            for (var index = 0; index < samples.length; index += 1) {
+              var value = (samples[index] - 128) / 128;
+              sum += value * value;
+            }
+            setAudioLevel(Math.min(1, Math.sqrt(sum / samples.length) * 5.6));
+            state.lowTarget = Math.min(1, Math.pow(getBand(2, 18), 0.74) * 1.34);
+            state.midTarget = Math.min(1, Math.pow(getBand(18, 92), 0.82) * 1.48);
+            state.highTarget = Math.min(1, Math.pow(getBand(92, 220), 0.90) * 1.7);
+            microphoneFrame = requestAnimationFrame(sample);
+          }
+          sample();
+        });
+      }).catch(function (error) {
+        stopMicrophone();
+        throw error;
+      });
+    }
+
+    window.VictorOrb = {
+      setState: setState,
+      simulateWakeWord: simulateWakeWord,
+      simulateError: triggerError,
+      setAudioLevel: setAudioLevel,
+      startMicrophone: startMicrophone,
+      stopMicrophone: stopMicrophone,
+    };
+
+    function receiveState(event) {
+      if (event.detail && event.detail.state) setState(event.detail.state);
+    }
+    window.addEventListener("victor:orb-state", receiveState);
+    function receiveWakeWord() { simulateWakeWord(); }
+    window.addEventListener("victor:wake-word", receiveWakeWord);
+    function receiveOrbError() { triggerError(); }
+    window.addEventListener("victor:orb-error", receiveOrbError);
+
+    function beginLiveInput(event) {
+      if (event instanceof KeyboardEvent && event.key.toLowerCase() === "v") return;
+      if (state.microphoneRequested || sourceStream) return;
+      state.microphoneRequested = true;
+      startMicrophone().catch(function () { state.microphoneRequested = false; });
+    }
+    window.addEventListener("pointerdown", beginLiveInput, { once: true });
+    window.addEventListener("keydown", beginLiveInput, { once: true });
+
+    function wakeShortcut(event) {
+      if (event.key.toLowerCase() === "v" && !event.metaKey && !event.ctrlKey && !event.altKey) simulateWakeWord();
+    }
+    window.addEventListener("keydown", wakeShortcut);
+
+    var socket = null;
+    var reconnectTimer = null;
+    var reconnectAttempt = 0;
+    var disposed = false;
+    var socketEndpoint = resolveWebSocketEndpoint();
+    state.connectionTarget = socketEndpoint ? 0.28 : 0.58;
+
+    function scheduleHeartbeat() {
+      state.heartbeatNextAt = performance.now() + 7000 + Math.random() * 4000;
+    }
+    function scheduleReconnect() {
+      if (!socketEndpoint || disposed || reconnectTimer !== null) return;
+      var delay = Math.min(12000, 800 * Math.pow(2, reconnectAttempt));
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
+      reconnectTimer = window.setTimeout(function () {
+        reconnectTimer = null;
+        connectSocket();
+      }, delay);
+    }
+    function routeSocketEvent(payload) {
+      return routeOrbSocketEvent(payload, {
+        setState: setState,
+        simulateWakeWord: simulateWakeWord,
+        triggerError: triggerError,
+        setAudioLevel: setAudioLevel,
+        emitTranscript: function (evt) { window.dispatchEvent(new CustomEvent("victor:transcript", { detail: evt })); },
+      });
+    }
+    function connectSocket() {
+      if (!socketEndpoint || disposed || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))) return;
+      try {
+        socket = new WebSocket(socketEndpoint);
+        socket.onopen = function () {
+          reconnectAttempt = 0;
+          state.connectionTarget = 1;
+          state.connectionPulse = 1;
+          scheduleHeartbeat();
+          if (pendingStartTurn) {
+            pendingStartTurn = false;
+            sendBridgeMessage({ type: "start_turn" });
+          }
+        };
+        socket.onmessage = function (event) {
+          if (typeof event.data !== "string") return;
+          try {
+            var payload = JSON.parse(event.data);
+            if (!payload || typeof payload !== "object") return;
+            if (payload.type === "tts_audio") {
+              playTtsAudio(payload);
+              return;
+            }
+            if (payload.type === "tts_stop") {
+              stopTtsPlayback(true);
+              return;
+            }
+            routeSocketEvent(payload);
+          } catch (e) { /* ignore malformed or non-orb messages */ }
+        };
+        socket.onerror = function () {
+          state.connectionTarget = 0.18;
+          state.heartbeatNextAt = 0;
+          state.heartbeatPulse = 0;
+          if (socket) socket.close();
+        };
+        socket.onclose = function () {
+          state.connectionTarget = 0.18;
+          state.heartbeatNextAt = 0;
+          state.heartbeatPulse = 0;
+          socket = null;
+          scheduleReconnect();
+        };
+      } catch (e) {
+        state.connectionTarget = 0.18;
+        state.heartbeatNextAt = 0;
+        state.heartbeatPulse = 0;
+        scheduleReconnect();
+      }
+    }
+    connectSocket();
+
+    function tick() {
+      var elapsed = clock.getElapsedTime();
+      var mixRate = 0.045;
+      visual.energy += (target.energy - visual.energy) * mixRate;
+      visual.brightness += (target.brightness - visual.brightness) * mixRate;
+      visual.speed += (target.speed - visual.speed) * mixRate;
+      visual.noise += (target.noise - visual.noise) * mixRate;
+      visual.pulse += (target.pulse - visual.pulse) * mixRate;
+      visual.halo += (target.halo - visual.halo) * mixRate;
+      visual.warning += (target.warning - visual.warning) * mixRate;
+      visual.direction += (target.direction - visual.direction) * mixRate;
+      state.audio += (state.audioTarget - state.audio) * 0.14;
+      state.low += (state.lowTarget - state.low) * 0.11;
+      state.mid += (state.midTarget - state.mid) * 0.11;
+      state.high += (state.highTarget - state.high) * 0.11;
+      state.connection += (state.connectionTarget - state.connection) * 0.055;
+      state.connectionPulse += (0 - state.connectionPulse) * 0.055;
+      if (state.connection > 0.9 && state.connectionTarget > 0.9) {
+        if (state.heartbeatNextAt === 0) scheduleHeartbeat();
+        if (performance.now() >= state.heartbeatNextAt) {
+          state.heartbeatPulse = 1;
+          scheduleHeartbeat();
+        }
+      } else {
+        state.heartbeatNextAt = 0;
+      }
+      state.heartbeatPulse += (0 - state.heartbeatPulse) * 0.035;
+      var speakingTarget = state.current === "speaking" ? 1 : 0;
+      state.speaking += (speakingTarget - state.speaking) * 0.075;
+      var listeningTarget = state.current === "listening" ? 1 : 0;
+      state.listening += (listeningTarget - state.listening) * 0.075;
+
+      material.uniforms.uTime.value = elapsed;
+      material.uniforms.uEnergy.value = visual.energy + state.low * 0.22 + state.mid * 0.10;
+      material.uniforms.uBrightness.value = visual.brightness + state.audio * 0.24 + state.high * 0.12;
+      material.uniforms.uSpeed.value = visual.speed + state.mid * 0.48;
+      material.uniforms.uNoise.value = visual.noise + state.mid * 0.28;
+      material.uniforms.uPulse.value = visual.pulse + state.low * 0.55;
+      material.uniforms.uAudio.value = state.audio;
+      material.uniforms.uLow.value = state.low;
+      material.uniforms.uMid.value = state.mid;
+      material.uniforms.uHigh.value = state.high;
+      material.uniforms.uHalo.value = visual.halo + state.audio * 0.22;
+      material.uniforms.uWarning.value = visual.warning;
+      material.uniforms.uDirection.value = visual.direction;
+      material.uniforms.uConnection.value = state.connection;
+      material.uniforms.uConnectionPulse.value = state.connectionPulse;
+      material.uniforms.uHeartbeatPulse.value = state.heartbeatPulse;
+      material.uniforms.uSpeaking.value = state.speaking;
+      material.uniforms.uListening.value = state.listening;
+      material.uniforms.uEnergy.value += state.heartbeatPulse * 0.05 + state.speaking * state.audio * 0.06;
+      material.uniforms.uSpeed.value += state.speaking * (0.10 + state.audio * 0.25);
+      material.uniforms.uBrightness.value += state.heartbeatPulse * 0.08;
+      material.uniforms.uHalo.value += state.heartbeatPulse * 0.07;
+      points.rotation.y = elapsed * (0.016 + visual.speed * 0.026);
+      points.rotation.x = Math.sin(elapsed * 0.12) * 0.045;
+      renderer.render(scene, camera);
+
+      frameCount += 1;
+      if (frameCount % 240 === 0) {
+        var now = performance.now();
+        var fps = (240000 / Math.max(1, now - fpsWindowStart));
+        fpsWindowStart = now;
+        if (fps < 46 && state.tier > 0) {
+          state.tier -= 1;
+          geometry.setDrawRange(0, state.tier === 0 ? Math.min(34000, state.quality) : Math.min(60000, state.quality));
+        } else if (fps > 57 && state.tier < 2 && state.quality > 60000) {
+          state.tier += 1;
+          geometry.setDrawRange(0, state.tier === 2 ? state.quality : Math.min(60000, state.quality));
+        }
+      }
+      animationFrame = requestAnimationFrame(tick);
+    }
+    tick();
+
+    window.addEventListener("beforeunload", function () {
+      disposed = true;
+      cancelAnimationFrame(animationFrame);
+      stopTtsPlayback(false);
+      stopMicrophone();
+      if (state.errorTimer !== null) window.clearTimeout(state.errorTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initOrb);
+  } else {
+    initOrb();
+  }
+})();
+
+/*
+ * PORTING_NOTES - deliberate, documented differences from the original
+ * React/Vite prototype (everything else above is verbatim):
+ *
+ * 1. No React/Vite/pnpm/Express toolchain. This project has no build
+ *    step; the orb is one static HTML file served directly (or later,
+ *    by our own FastAPI static file serving - spec section 36's
+ *    app/ui/server.py). Three.js is loaded from a CDN instead of an
+ *    npm package.
+ * 2. `import.meta.env.VITE_VICTOR_WS_URL` (a Vite build-time env var)
+ *    has no equivalent without a build step, so it was dropped from
+ *    resolveWebSocketEndpoint(). The `?ws=` query param and the
+ *    localhost default (both still present) cover the same real
+ *    use cases: an explicit endpoint, or the local-dev default.
+ * 3. The React component lifecycle (mount/unmount cleanup) became a
+ *    single init-on-load function with a `beforeunload` cleanup
+ *    instead of a React effect cleanup - same teardown logic, no
+ *    framework to trigger it automatically on unmount.
+ * 4. TranscriptPanel.tsx's React state/JSX became plain DOM
+ *    manipulation (renderTranscript()) - same data model (bounded to
+ *    40 entries, 800-char clip, textContent-only rendering for the
+ *    same injection safety), no virtual DOM.
+ * 5. VictorOrbCanvas.tsx and SignalWaveform.tsx from the prototype
+ *    were NOT ported - they exist in the source tree but are never
+ *    imported by App.tsx/Home.tsx, so they're dead code in the
+ *    original too.
+ * 6. routeOrbSocketEvent is exposed as `window.routeOrbSocketEvent`
+ *    (the original exported it from the module for its Vitest suite)
+ *    so an equivalent test harness can still reach it directly.
+ *
+ * Everything else - both shaders byte-for-byte, the PROFILES table,
+ * the particle geometry distribution, the mic/FFT band math, the
+ * state machine (including the wake-to-listening auto-transition and
+ * the 5-second error hold with restored pre-error state), the
+ * adaptive quality/FPS tiering, and the full window.VictorOrb API -
+ * is unchanged.
+ */
+</script>
+
+</body>
+</html>

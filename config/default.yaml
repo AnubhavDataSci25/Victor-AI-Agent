@@ -1,0 +1,15 @@
+# Victor 2.0 — Default Configuration
+# Override any value via environment variables (see .env)
+
+security:
+  auth_mode: "pin"
+  max_failed_attempts: 3
+  lockout_seconds: 60
+  session_timeout_minutes: 15
+
+filesystem:
+  max_read_bytes: 1000000
+
+browser:
+  headless: false
+  default_timeout_ms: 10000
