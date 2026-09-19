@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 # Strict Whitelist to prevent arbitrary path execution
 APP_WHITELIST = {
     "notepad": "notepad.exe",
-    "stremio": "stremio.exe",
+    "stremio": r"C:\Users\anu52\AppData\Local\Programs\LNV\Stremio-4\stremio.exe",
     "calculator": "calc.exe",
     "command_prompt": "cmd.exe",
     "task_manager": "taskmgr.exe",

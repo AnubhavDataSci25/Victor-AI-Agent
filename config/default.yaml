@@ -4,7 +4,7 @@
 security:
   auth_mode: "pin"
   max_failed_attempts: 3
-  lockout_seconds: 60
+  lockout_seconds: 600
   session_timeout_minutes: 15
 
 filesystem:

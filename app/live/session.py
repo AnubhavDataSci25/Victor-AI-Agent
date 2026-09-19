@@ -37,7 +37,7 @@ class LiveSessionManager:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Fenrir"
+                        voice_name="Dipper"
                     )
                 )
             ),

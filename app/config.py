@@ -40,7 +40,7 @@ class SecurityConfig(BaseModel):
     """Authentication and session security settings."""
     auth_mode: str = "pin"  # "pin" or "passphrase"
     max_failed_attempts: int = 3
-    lockout_seconds: int = 60
+    lockout_seconds: int = 600
     session_timeout_minutes: int = 15
     secrets_path: str = str(_PROJECT_ROOT / "config" / "secrets.yaml")
 

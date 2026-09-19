@@ -344,17 +344,136 @@ function updateUIState(stateName) {
 }
 
 // ==========================================================================
-// 6-DIGIT 3D PIN VERIFICATION CONTROLLER
+// 6-DIGIT 3D PIN VERIFICATION & SECURITY CONTROLLER
 // ==========================================================================
 let enteredPin = "";
 let isVerifying = false;
+let isLockedOut = false;
+let autoResetTimer = null;
+let lockoutIntervalId = null;
+
 const HARDCODED_PIN = "081225";
 const TOTAL_SLOTS = 6;
+const MAX_ATTEMPTS = 3;
+const LOCKOUT_DURATION_MS = 10 * 60 * 1000; // 10 minutes (600,000 ms)
+
+const STORAGE_KEY_FAILED_ATTEMPTS = "victor_pin_failed_attempts";
+const STORAGE_KEY_LOCKOUT_UNTIL = "victor_pin_lockout_until";
+
+let failedAttempts = parseInt(localStorage.getItem(STORAGE_KEY_FAILED_ATTEMPTS) || "0", 10);
+if (isNaN(failedAttempts) || failedAttempts < 0) failedAttempts = 0;
+
 const pinSlots = document.querySelectorAll('.pin-slot-anchor');
 const checkIcon = verdictTile ? verdictTile.querySelector('.check-icon') : null;
 const crossIcon = verdictTile ? verdictTile.querySelector('.cross-icon') : null;
+const lockIcon = verdictTile ? verdictTile.querySelector('.lock-icon') : null;
+const pinAuthCard = document.querySelector('.pin-auth-card');
+
+function clearLockoutState() {
+    localStorage.removeItem(STORAGE_KEY_LOCKOUT_UNTIL);
+    localStorage.removeItem(STORAGE_KEY_FAILED_ATTEMPTS);
+    failedAttempts = 0;
+    isLockedOut = false;
+    if (lockoutIntervalId) {
+        clearInterval(lockoutIntervalId);
+        lockoutIntervalId = null;
+    }
+    if (pinAuthCard) pinAuthCard.classList.remove('is-locked');
+    if (pinSubtext) pinSubtext.textContent = "ENTER 6-DIGIT AUTHORIZATION PIN";
+    if (pinHiddenInput) pinHiddenInput.disabled = false;
+}
+
+function enterLockoutMode(lockoutUntil) {
+    isLockedOut = true;
+    isVerifying = false;
+    if (autoResetTimer) {
+        clearTimeout(autoResetTimer);
+        autoResetTimer = null;
+    }
+
+    localStorage.setItem(STORAGE_KEY_LOCKOUT_UNTIL, lockoutUntil.toString());
+    localStorage.setItem(STORAGE_KEY_FAILED_ATTEMPTS, MAX_ATTEMPTS.toString());
+    failedAttempts = MAX_ATTEMPTS;
+
+    if (pinHiddenInput) {
+        pinHiddenInput.value = "";
+        pinHiddenInput.blur();
+        pinHiddenInput.disabled = true;
+    }
+    if (pinVerifyBtn) pinVerifyBtn.classList.remove('is-visible');
+
+    if (pinAuthCard) pinAuthCard.classList.add('is-locked');
+    if (pinOrbitRing) {
+        pinOrbitRing.classList.remove('is-spinning', 'is-orbiting');
+        pinOrbitRing.classList.add('is-screwing-down');
+    }
+
+    if (verdictTile) {
+        verdictTile.classList.remove('verdict-success', 'verdict-error');
+        verdictTile.classList.add('is-visible', 'verdict-locked');
+    }
+    if (checkIcon) checkIcon.classList.add('hidden');
+    if (crossIcon) crossIcon.classList.add('hidden');
+    if (lockIcon) lockIcon.classList.remove('hidden');
+
+    if (pinSubtext) {
+        pinSubtext.innerHTML = '<span style="color: var(--accent-rose); font-weight: 600; letter-spacing: 2px;">SECURITY PROTOCOL ACTIVE // TERMINAL LOCKED</span>';
+    }
+
+    function updateCountdown() {
+        const now = Date.now();
+        const diffMs = lockoutUntil - now;
+
+        if (diffMs <= 0) {
+            clearLockoutState();
+            resetPINBoard(false);
+            if (pinStatusText) {
+                pinStatusText.innerHTML = '<span style="color: var(--accent-emerald); font-weight: 600; letter-spacing: 1.5px;">LOCKOUT EXPIRED // ENTER PIN TO RETRY</span>';
+            }
+            return;
+        }
+
+        const totalSec = Math.ceil(diffMs / 1000);
+        const mins = Math.floor(totalSec / 60);
+        const secs = totalSec % 60;
+        const formattedTime = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+
+        if (pinStatusText) {
+            pinStatusText.innerHTML = `
+                <div style="color: var(--accent-rose); font-weight: 600; letter-spacing: 2px; font-size: 0.82rem;">
+                    MAX ATTEMPTS EXCEEDED (3/3 WRONG)
+                </div>
+                <div class="lockout-countdown">
+                    ${formattedTime}
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 1px; margin-top: 4px;">
+                    Terminal locked for 10 minutes. Cooldown in progress.
+                </div>
+            `;
+        }
+    }
+
+    updateCountdown();
+    if (lockoutIntervalId) clearInterval(lockoutIntervalId);
+    lockoutIntervalId = setInterval(updateCountdown, 1000);
+}
+
+function checkLockoutState() {
+    const lockoutUntilStr = localStorage.getItem(STORAGE_KEY_LOCKOUT_UNTIL);
+    if (lockoutUntilStr) {
+        const lockoutUntil = parseInt(lockoutUntilStr, 10);
+        if (Date.now() < lockoutUntil) {
+            enterLockoutMode(lockoutUntil);
+            return true;
+        } else {
+            clearLockoutState();
+        }
+    }
+    return false;
+}
 
 function updateSlotVisuals() {
+    if (isLockedOut) return;
     pinSlots.forEach((slot, idx) => {
         if (idx < enteredPin.length) {
             slot.classList.add('is-flipped');
@@ -376,7 +495,7 @@ function updateSlotVisuals() {
 }
 
 async function triggerVerification() {
-    if (isVerifying || enteredPin.length !== TOTAL_SLOTS) return;
+    if (isLockedOut || isVerifying || enteredPin.length !== TOTAL_SLOTS) return;
     isVerifying = true;
 
     if (pinHiddenInput) pinHiddenInput.blur();
@@ -391,7 +510,6 @@ async function triggerVerification() {
     }
 
     // Step 5: Continuous Spin & Flip (2 seconds)
-    // Entire circle spins 1.25 turns (450 deg) over exactly 2s while individual slots flip top-to-bottom
     await new Promise(resolve => setTimeout(resolve, 50));
     if (pinOrbitRing) {
         pinOrbitRing.classList.add('is-spinning');
@@ -404,7 +522,6 @@ async function triggerVerification() {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Step 6: The Verdict (Screw Down)
-    // 6 slots screw down (shrink and collapse) into the center of the orbit, merging into one tile
     if (pinOrbitRing) {
         pinOrbitRing.classList.remove('is-spinning');
         pinOrbitRing.classList.add('is-screwing-down');
@@ -418,12 +535,14 @@ async function triggerVerification() {
     const isCorrect = (enteredPin === HARDCODED_PIN);
 
     if (isCorrect) {
-        // Success: Center tile becomes green verified checkmark
+        clearLockoutState();
+
         if (verdictTile) {
             verdictTile.classList.add('verdict-success');
         }
         if (checkIcon) checkIcon.classList.remove('hidden');
         if (crossIcon) crossIcon.classList.add('hidden');
+        if (lockIcon) lockIcon.classList.add('hidden');
         if (pinStatusText) {
             pinStatusText.innerHTML = '<span style="color: var(--accent-emerald); font-weight: 600; letter-spacing: 2px;">VERIFIED // ACCESS GRANTED</span>';
         }
@@ -443,27 +562,58 @@ async function triggerVerification() {
                 authOverlay.style.opacity = '0';
                 setTimeout(() => {
                     authOverlay.style.display = 'none';
-                    resetPINBoard();
+                    resetPINBoard(false);
                 }, 400);
             }
         }, 900);
 
     } else {
-        // Error: Center tile becomes red error cross with Verification Failed text
-        if (verdictTile) {
-            verdictTile.classList.add('verdict-error');
-        }
-        if (crossIcon) crossIcon.classList.remove('hidden');
-        if (checkIcon) checkIcon.classList.add('hidden');
-        if (pinStatusText) {
-            pinStatusText.innerHTML = '<span style="color: var(--accent-rose); font-weight: 600; letter-spacing: 2px;">VERIFICATION FAILED</span><br><span style="font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 1px; margin-top: 4px; display: inline-block;">Click tile to retry</span>';
+        // Increment failed attempts
+        failedAttempts++;
+        localStorage.setItem(STORAGE_KEY_FAILED_ATTEMPTS, failedAttempts.toString());
+
+        if (failedAttempts >= MAX_ATTEMPTS) {
+            // Lock the website for straight 10 minutes
+            const lockoutUntil = Date.now() + LOCKOUT_DURATION_MS;
+            enterLockoutMode(lockoutUntil);
+        } else {
+            // Retries remaining (Attempt 1 or 2 failed)
+            const remaining = MAX_ATTEMPTS - failedAttempts;
+
+            if (verdictTile) {
+                verdictTile.classList.add('verdict-error');
+            }
+            if (crossIcon) crossIcon.classList.remove('hidden');
+            if (checkIcon) checkIcon.classList.add('hidden');
+            if (lockIcon) lockIcon.classList.add('hidden');
+
+            if (pinStatusText) {
+                pinStatusText.innerHTML = `
+                    <span style="color: var(--accent-rose); font-weight: 600; letter-spacing: 2px;">INCORRECT PIN // ${remaining} ${remaining === 1 ? 'ATTEMPT' : 'ATTEMPTS'} REMAINING</span>
+                    <br><span style="font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 1px; margin-top: 4px; display: inline-block;">Keypad resetting...</span>
+                `;
+            }
+
+            // Automatically reset keypad after 1.3s so the user can immediately re-enter PIN without refreshing
+            autoResetTimer = setTimeout(() => {
+                resetPINBoard(true);
+            }, 1300);
         }
     }
 }
 
-function resetPINBoard() {
+function resetPINBoard(showRemainingAttempts = true) {
+    if (isLockedOut) return;
+    if (autoResetTimer) {
+        clearTimeout(autoResetTimer);
+        autoResetTimer = null;
+    }
+
     enteredPin = "";
-    if (pinHiddenInput) pinHiddenInput.value = "";
+    if (pinHiddenInput) {
+        pinHiddenInput.value = "";
+        pinHiddenInput.disabled = false;
+    }
     isVerifying = false;
 
     if (pinOrbitRing) {
@@ -471,9 +621,10 @@ function resetPINBoard() {
     }
 
     if (verdictTile) {
-        verdictTile.classList.remove('is-visible', 'verdict-success', 'verdict-error');
+        verdictTile.classList.remove('is-visible', 'verdict-success', 'verdict-error', 'verdict-locked');
         if (checkIcon) checkIcon.classList.add('hidden');
         if (crossIcon) crossIcon.classList.add('hidden');
+        if (lockIcon) lockIcon.classList.add('hidden');
     }
 
     if (pinVerifyBtn) {
@@ -481,14 +632,19 @@ function resetPINBoard() {
     }
 
     if (pinStatusText) {
-        pinStatusText.innerHTML = "";
+        if (showRemainingAttempts && failedAttempts > 0 && failedAttempts < MAX_ATTEMPTS) {
+            const remaining = MAX_ATTEMPTS - failedAttempts;
+            pinStatusText.innerHTML = `<span style="color: var(--accent-amber); font-size: 0.76rem; letter-spacing: 1.5px; font-weight: 500;">ATTEMPT ${failedAttempts + 1} OF ${MAX_ATTEMPTS} // ${remaining} ${remaining === 1 ? 'RETRY' : 'RETRIES'} REMAINING</span>`;
+        } else if (!showRemainingAttempts) {
+            pinStatusText.innerHTML = "";
+        }
     }
 
     updateSlotVisuals();
 
     if (authOverlay && authOverlay.style.display !== 'none') {
         setTimeout(() => {
-            if (pinHiddenInput) pinHiddenInput.focus();
+            if (pinHiddenInput && !isLockedOut) pinHiddenInput.focus();
         }, 60);
     }
 }
@@ -496,7 +652,7 @@ function resetPINBoard() {
 // Step 1: Input handling & typing numbers invisible with blinking cursor
 if (pinHiddenInput) {
     pinHiddenInput.addEventListener('input', () => {
-        if (isVerifying) return;
+        if (isLockedOut || isVerifying) return;
         const clean = pinHiddenInput.value.replace(/\D/g, '').slice(0, TOTAL_SLOTS);
         pinHiddenInput.value = clean;
         enteredPin = clean;
@@ -504,18 +660,42 @@ if (pinHiddenInput) {
     });
 
     pinHiddenInput.addEventListener('keydown', (e) => {
-        if (isVerifying) return;
+        if (isLockedOut || isVerifying) return;
         if (e.key === 'Enter' && enteredPin.length === TOTAL_SLOTS) {
             triggerVerification();
         }
     });
 }
 
-// Focus on click
-if (pinStage) {
-    pinStage.addEventListener('click', () => {
+// Instant dismiss / key-capture on error state:
+window.addEventListener('keydown', (e) => {
+    if (isLockedOut) return;
+    if (verdictTile && verdictTile.classList.contains('verdict-error')) {
+        if (autoResetTimer) {
+            clearTimeout(autoResetTimer);
+            autoResetTimer = null;
+        }
+        resetPINBoard(true);
+        if (/^[0-9]$/.test(e.key)) {
+            enteredPin = e.key;
+            if (pinHiddenInput) {
+                pinHiddenInput.value = e.key;
+            }
+            updateSlotVisuals();
+        }
+    }
+});
+
+// Focus / instant reset on click
+if (pinAuthCard) {
+    pinAuthCard.addEventListener('click', (e) => {
+        if (isLockedOut) return;
         if (verdictTile && verdictTile.classList.contains('verdict-error')) {
-            resetPINBoard();
+            if (autoResetTimer) {
+                clearTimeout(autoResetTimer);
+                autoResetTimer = null;
+            }
+            resetPINBoard(true);
         } else if (!isVerifying && pinHiddenInput) {
             pinHiddenInput.focus();
         }
@@ -524,8 +704,9 @@ if (pinStage) {
 
 // Step 3: Button trigger
 if (pinVerifyBtn) {
-    pinVerifyBtn.addEventListener('click', () => {
-        if (!isVerifying && enteredPin.length === TOTAL_SLOTS) {
+    pinVerifyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isLockedOut && !isVerifying && enteredPin.length === TOTAL_SLOTS) {
             triggerVerification();
         }
     });
@@ -535,16 +716,26 @@ if (pinVerifyBtn) {
 if (verdictTile) {
     verdictTile.addEventListener('click', (e) => {
         e.stopPropagation();
-        resetPINBoard();
+        if (!isLockedOut) {
+            resetPINBoard(true);
+        }
     });
 }
 
-// Auto-focus input on page load
-setTimeout(() => {
-    if (pinHiddenInput && authOverlay && authOverlay.style.display !== 'none') {
-        pinHiddenInput.focus();
+// Check initial lockout state and auto-focus
+if (!checkLockoutState()) {
+    if (failedAttempts > 0 && failedAttempts < MAX_ATTEMPTS) {
+        const remaining = MAX_ATTEMPTS - failedAttempts;
+        if (pinStatusText) {
+            pinStatusText.innerHTML = `<span style="color: var(--accent-amber); font-size: 0.76rem; letter-spacing: 1.5px; font-weight: 500;">ATTEMPT ${failedAttempts + 1} OF ${MAX_ATTEMPTS} // ${remaining} ${remaining === 1 ? 'RETRY' : 'RETRIES'} REMAINING</span>`;
+        }
     }
-}, 300);
+    setTimeout(() => {
+        if (pinHiddenInput && authOverlay && authOverlay.style.display !== 'none') {
+            pinHiddenInput.focus();
+        }
+    }, 300);
+}
 
 // ==========================================================================
 // STATE & WEBSOCKET MANAGEMENT

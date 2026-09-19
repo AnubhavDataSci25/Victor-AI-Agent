@@ -1108,6 +1108,39 @@ body::before {
     filter: drop-shadow(0 0 8px var(--accent-rose));
 }
 
+.verdict-tile.verdict-locked {
+    background: rgba(255, 51, 102, 0.22);
+    border: 2px solid var(--accent-rose);
+    box-shadow: 0 0 40px rgba(255, 51, 102, 0.65), inset 0 0 20px rgba(255, 51, 102, 0.3);
+    animation: verdictTilePop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, lockoutPulse 2s ease-in-out infinite alternate;
+}
+
+@keyframes lockoutPulse {
+    0% { box-shadow: 0 0 25px rgba(255, 51, 102, 0.4), inset 0 0 10px rgba(255, 51, 102, 0.2); }
+    100% { box-shadow: 0 0 50px rgba(255, 51, 102, 0.8), inset 0 0 25px rgba(255, 51, 102, 0.45); }
+}
+
+.verdict-tile.verdict-locked .verdict-icon {
+    color: var(--accent-rose);
+    filter: drop-shadow(0 0 12px var(--accent-rose));
+}
+
+.auth-box.pin-auth-card.is-locked {
+    border-color: rgba(255, 51, 102, 0.45);
+    box-shadow: 0 0 60px rgba(255, 51, 102, 0.18), inset 0 0 25px rgba(255, 51, 102, 0.08);
+}
+
+.lockout-countdown {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 2px;
+    font-size: 1.1rem;
+    color: var(--accent-rose);
+    text-shadow: 0 0 12px rgba(255, 51, 102, 0.6);
+    margin-top: 6px;
+}
+
 /* Verify Button */
 .pin-verify-btn {
     display: flex;

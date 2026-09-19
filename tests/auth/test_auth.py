@@ -139,3 +139,11 @@ async def test_victor_session_manager_auth_integration():
     # Clean up
     await sm.lock()
     assert sm.state == VictorState.CLOSED
+
+
+def test_auth_manager_10_minute_lockout_config():
+    """Verify default security config enforces 3 attempts and 600s (10 mins) lockout."""
+    from app.config import load_config
+    cfg = load_config()
+    assert cfg.security.max_failed_attempts == 3
+    assert cfg.security.lockout_seconds == 600
