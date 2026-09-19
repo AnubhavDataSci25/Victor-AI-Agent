@@ -90,3 +90,142 @@ class WindowsComputerDriver:
         except Exception as e:
             logger.error(f"Failed to lock Windows: {e}")
             return f"Failed to lock Windows. Error: {str(e)}"
+
+    @staticmethod
+    def click(x: int, y: int, button: str = "left") -> str:
+        """Moves cursor to (x, y) and performs a mouse click."""
+        try:
+            x, y = int(x), int(y)
+            button = button.lower()
+            try:
+                import win32api
+                import win32con
+                win32api.SetCursorPos((x, y))
+                if button == "right":
+                    win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+                elif button == "double":
+                    import time
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                    time.sleep(0.05)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                else:
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            except ImportError:
+                ctypes.windll.user32.SetCursorPos(x, y)
+                if button == "right":
+                    ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # RIGHTDOWN
+                    ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # RIGHTUP
+                elif button == "double":
+                    import time
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+                    time.sleep(0.05)
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                else:
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+
+            return f"Clicked {button} button at ({x}, {y})."
+        except Exception as e:
+            logger.error(f"Failed to click at ({x}, {y}): {e}")
+            return f"Failed to click at ({x}, {y}). Error: {str(e)}"
+
+    @staticmethod
+    def scroll(direction: str = "down", amount: int = 3) -> str:
+        """Scrolls the active window up or down."""
+        try:
+            direction = direction.lower()
+            amount = int(amount)
+            wheel_delta = 120 * amount if direction == "up" else -120 * amount
+            try:
+                import win32api
+                import win32con
+                win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, wheel_delta, 0)
+            except ImportError:
+                ctypes.windll.user32.mouse_event(0x0800, 0, 0, wheel_delta, 0)  # MOUSEEVENTF_WHEEL
+            return f"Scrolled {direction} by {amount} steps."
+        except Exception as e:
+            logger.error(f"Failed to scroll {direction}: {e}")
+            return f"Failed to scroll {direction}. Error: {str(e)}"
+
+    @staticmethod
+    def press_key(key: str) -> str:
+        """Presses and releases a virtual key (e.g. enter, tab, escape, backspace)."""
+        key_name = key.lower().strip()
+        key_map = {
+            "enter": 0x0D,
+            "return": 0x0D,
+            "tab": 0x09,
+            "escape": 0x1B,
+            "esc": 0x1B,
+            "backspace": 0x08,
+            "space": 0x20,
+            "delete": 0x2E,
+            "del": 0x2E,
+            "up": 0x26,
+            "down": 0x28,
+            "left": 0x25,
+            "right": 0x27,
+            "home": 0x24,
+            "end": 0x23,
+            "pageup": 0x21,
+            "pagedown": 0x22,
+        }
+
+        try:
+            if key_name in key_map:
+                WindowsComputerDriver.trigger_virtual_key(key_map[key_name])
+                return f"Pressed key '{key}'."
+            elif len(key) == 1:
+                try:
+                    import win32api
+                    import win32con
+                    win32api.keybd_event(0, ord(key), win32con.KEYEVENTF_UNICODE, 0)
+                    win32api.keybd_event(0, ord(key), win32con.KEYEVENTF_UNICODE | win32con.KEYEVENTF_KEYUP, 0)
+                except ImportError:
+                    ctypes.windll.user32.keybd_event(0, ord(key), 0x0004, 0)
+                    ctypes.windll.user32.keybd_event(0, ord(key), 0x0004 | 0x0002, 0)
+                return f"Pressed key '{key}'."
+            else:
+                return f"Unsupported key: '{key}'."
+        except Exception as e:
+            logger.error(f"Failed to press key '{key}': {e}")
+            return f"Failed to press key '{key}'. Error: {str(e)}"
+
+    @staticmethod
+    def type_text(text: str, click_x: Optional[int] = None, click_y: Optional[int] = None) -> str:
+        """Types unicode text, optionally clicking (click_x, click_y) first to focus the field."""
+        try:
+            import time
+            if click_x is not None and click_y is not None:
+                WindowsComputerDriver.click(click_x, click_y, button="left")
+                time.sleep(0.15)
+
+            try:
+                import win32api
+                import win32con
+                for char in text:
+                    if char == "\n":
+                        WindowsComputerDriver.trigger_virtual_key(0x0D)
+                    else:
+                        win32api.keybd_event(0, ord(char), win32con.KEYEVENTF_UNICODE, 0)
+                        win32api.keybd_event(0, ord(char), win32con.KEYEVENTF_UNICODE | win32con.KEYEVENTF_KEYUP, 0)
+                    time.sleep(0.01)
+            except ImportError:
+                for char in text:
+                    if char == "\n":
+                        WindowsComputerDriver.trigger_virtual_key(0x0D)
+                    else:
+                        ctypes.windll.user32.keybd_event(0, ord(char), 0x0004, 0)
+                        ctypes.windll.user32.keybd_event(0, ord(char), 0x0004 | 0x0002, 0)
+                    time.sleep(0.01)
+
+            return f"Successfully typed {len(text)} characters."
+        except Exception as e:
+            logger.error(f"Failed to type text: {e}")
+            return f"Failed to type text. Error: {str(e)}"

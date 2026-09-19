@@ -31,6 +31,13 @@ class VictorSessionManager:
         self._secret_store.ensure_configured()
         self._auth_manager = AuthManager(self._config.security, self._secret_store)
 
+        # Memory & Context Manager
+        from app.memory.manager import MemoryManager
+        self.memory = MemoryManager(
+            db_path=self._config.memory.db_path,
+            max_recall_results=self._config.memory.max_recall_results,
+        )
+
         # Security: Inactivity tracking
         self.last_activity_time = time.time()
         self.watchdog_task = None
@@ -92,6 +99,9 @@ class VictorSessionManager:
 
         if self.watchdog_task:
             self.watchdog_task.cancel()
+
+        if hasattr(self, "memory"):
+            self.memory.session.clear()
 
         self._auth_manager.lock()
         await self.live_session.close()

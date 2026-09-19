@@ -42,16 +42,48 @@ def build_tool_registry() -> ToolRegistry:
     # --- Computer / OS Automation Tools ---
     try:
         from app.tools.computer.tool import (
+            ComputerClickTool,
             ComputerCloseApplicationTool,
             ComputerOpenApplicationTool,
+            ComputerPressKeyTool,
+            ComputerScrollTool,
+            ComputerSubmitFormTool,
             ComputerTakeScreenshotTool,
+            ComputerTypeTextTool,
         )
         registry.register(ComputerOpenApplicationTool())
         registry.register(ComputerCloseApplicationTool())
         registry.register(ComputerTakeScreenshotTool())
+        registry.register(ComputerClickTool())
+        registry.register(ComputerTypeTextTool())
+        registry.register(ComputerPressKeyTool())
+        registry.register(ComputerScrollTool())
+        registry.register(ComputerSubmitFormTool())
         logger.info("Registered computer tools.")
     except Exception as e:
         logger.warning(f"Computer tools unavailable: {e}")
+
+    # --- Screen Understanding Tools ---
+    try:
+        from app.tools.screen.tool import ScreenUnderstandTool
+        registry.register(ScreenUnderstandTool())
+        logger.info("Registered screen understanding tools.")
+    except Exception as e:
+        logger.warning(f"Screen understanding tools unavailable: {e}")
+
+    # --- Memory Tools ---
+    try:
+        from app.tools.memory.tool import (
+            MemoryForgetTool,
+            MemoryRecallTool,
+            MemoryRememberTool,
+        )
+        registry.register(MemoryRememberTool())
+        registry.register(MemoryRecallTool())
+        registry.register(MemoryForgetTool())
+        logger.info("Registered memory tools.")
+    except Exception as e:
+        logger.warning(f"Memory tools unavailable: {e}")
 
     # --- System Tools ---
     try:

@@ -70,6 +70,13 @@ class ComputerConfig(BaseModel):
     })
 
 
+class MemoryConfig(BaseModel):
+    """Memory & Context Manager settings."""
+    db_path: str = str(_PROJECT_ROOT / "config" / "memory.db")
+    max_recall_results: int = 3
+    enabled: bool = True
+
+
 class VictorConfig(BaseModel):
     """Top-level configuration for Victor 2.0."""
     host: str = "127.0.0.1"
@@ -80,6 +87,7 @@ class VictorConfig(BaseModel):
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     computer: ComputerConfig = Field(default_factory=ComputerConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 def load_config() -> VictorConfig:
@@ -103,6 +111,10 @@ def load_config() -> VictorConfig:
         security_cfg = yaml_data.get("security", {})
         security_cfg["auth_mode"] = os.getenv("VICTOR_AUTH_MODE")
         yaml_data["security"] = security_cfg
+    if os.getenv("VICTOR_MEMORY_DB"):
+        memory_cfg = yaml_data.get("memory", {})
+        memory_cfg["db_path"] = os.getenv("VICTOR_MEMORY_DB")
+        yaml_data["memory"] = memory_cfg
 
     merged = {**yaml_data, **env_overrides}
     return VictorConfig(**merged)
