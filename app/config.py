@@ -67,6 +67,7 @@ class ComputerConfig(BaseModel):
         "control_panel": "control.exe",
         "system_information": "msinfo32.exe",
         "on_screen_keyboard": "osk.exe",
+        "vscode": "code",
     })
 
 
@@ -75,6 +76,24 @@ class MemoryConfig(BaseModel):
     db_path: str = str(_PROJECT_ROOT / "config" / "memory.db")
     max_recall_results: int = 3
     enabled: bool = True
+
+
+class CodingConfig(BaseModel):
+    """Coding Computer Control & Groq inference settings."""
+    groq_api_key: str = Field(default_factory=lambda: os.getenv("GROQ_API") or os.getenv("GROQ_API_KEY") or "")
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_api_base: str = "https://api.groq.com/openai/v1"
+    approved_workspace_roots: list[str] = Field(default_factory=lambda: [
+        str(Path.home()),
+        "E:\\",
+        "C:\\Projects",
+        "D:\\Projects",
+        "E:\\Projects",
+        str(_PROJECT_ROOT),
+    ])
+    max_fix_iterations: int = 2
+    command_timeout_seconds: int = 30
+    vscode_path: str = ""
 
 
 class VictorConfig(BaseModel):
@@ -88,6 +107,7 @@ class VictorConfig(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     computer: ComputerConfig = Field(default_factory=ComputerConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    coding: CodingConfig = Field(default_factory=CodingConfig)
 
 
 def load_config() -> VictorConfig:
@@ -116,5 +136,20 @@ def load_config() -> VictorConfig:
         memory_cfg["db_path"] = os.getenv("VICTOR_MEMORY_DB")
         yaml_data["memory"] = memory_cfg
 
+    # Coding overrides
+    coding_cfg = yaml_data.get("coding", {})
+    groq_key = os.getenv("GROQ_API") or os.getenv("GROQ_API_KEY")
+    if groq_key:
+        coding_cfg["groq_api_key"] = groq_key
+    if os.getenv("GROQ_CODING_MODEL"):
+        coding_cfg["groq_model"] = os.getenv("GROQ_CODING_MODEL")
+    if os.getenv("GROQ_API_BASE"):
+        coding_cfg["groq_api_base"] = os.getenv("GROQ_API_BASE")
+    if os.getenv("VSCODE_PATH"):
+        coding_cfg["vscode_path"] = os.getenv("VSCODE_PATH")
+    if coding_cfg:
+        yaml_data["coding"] = coding_cfg
+
     merged = {**yaml_data, **env_overrides}
     return VictorConfig(**merged)
+

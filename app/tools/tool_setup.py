@@ -151,6 +151,32 @@ def build_tool_registry() -> ToolRegistry:
     except Exception as e:
         logger.warning(f"Web app tools unavailable: {e}")
 
+    # --- Coding Computer Control Tools ---
+    try:
+        from app.tools.coding.tool import (
+            CloseVSCodeTool,
+            CodingCloseVSCodeTool,
+            CodingDeleteFileTool,
+            CodingExecuteTaskTool,
+            CodingGetWorkspaceStatusTool,
+            CodingResolveWorkspaceTool,
+            CodingRunCommandTool,
+            DeleteFileTool,
+        )
+        registry.register(CodingResolveWorkspaceTool())
+        registry.register(CodingExecuteTaskTool())
+        registry.register(CodingRunCommandTool())
+        registry.register(CodingGetWorkspaceStatusTool())
+        registry.register(CodingDeleteFileTool())
+        registry.register(DeleteFileTool())
+        registry.register(CodingCloseVSCodeTool())
+        registry.register(CloseVSCodeTool())
+        logger.info("Registered coding computer control tools.")
+    except Exception as e:
+        logger.warning(f"Coding tools unavailable: {e}")
+
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")
     return registry
+
+
