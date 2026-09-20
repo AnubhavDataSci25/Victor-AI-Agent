@@ -14,7 +14,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_FILE = _PROJECT_ROOT / "config" / "default.yaml"
@@ -96,6 +96,17 @@ class CodingConfig(BaseModel):
     vscode_path: str = ""
 
 
+class MultiAgentConfig(BaseModel):
+    """Multi-Agent Project Planning & Execution settings."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    downloads_dir: str | Path = Field(default_factory=lambda: str(Path.home() / "Downloads"))
+    gemini_url: str = "https://gemini.google.com"
+    chatgpt_url: str = "https://chatgpt.com"
+    claude_url: str = "https://claude.ai"
+    browser_timeout_seconds: int = 60
+    simulate_responses: bool = Field(default_factory=lambda: os.getenv("MULTI_AGENT_SIMULATE", "").lower() in ("true", "1", "yes"))
+
+
 class VictorConfig(BaseModel):
     """Top-level configuration for Victor 2.0."""
     host: str = "127.0.0.1"
@@ -108,6 +119,7 @@ class VictorConfig(BaseModel):
     computer: ComputerConfig = Field(default_factory=ComputerConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     coding: CodingConfig = Field(default_factory=CodingConfig)
+    multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
 
 
 def load_config() -> VictorConfig:
@@ -150,6 +162,14 @@ def load_config() -> VictorConfig:
     if coding_cfg:
         yaml_data["coding"] = coding_cfg
 
+    # Multi-Agent overrides
+    multi_agent_cfg = yaml_data.get("multi_agent", {})
+    if os.getenv("MULTI_AGENT_DOWNLOADS_DIR"):
+        multi_agent_cfg["downloads_dir"] = os.getenv("MULTI_AGENT_DOWNLOADS_DIR")
+    if multi_agent_cfg:
+        yaml_data["multi_agent"] = multi_agent_cfg
+
     merged = {**yaml_data, **env_overrides}
     return VictorConfig(**merged)
+
 

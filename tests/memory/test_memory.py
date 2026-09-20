@@ -33,7 +33,7 @@ from app.tools.tool_setup import build_tool_registry
 def test_sanitizer_rejects_api_keys():
     """Verify API keys for Gemini, OpenAI, GitHub, and generic keys are rejected."""
     # Gemini API key format
-    is_sens, desc = MemorySanitizer.is_sensitive("AIzaSyBvTDYNATJ6Py69Nb3ZqxYa1Lgx5MTZZXg")
+    is_sens, desc = MemorySanitizer.is_sensitive("AIzaSyDummyKeyForTesting1234567890abcde")
     assert is_sens is True
     assert "API Key" in desc
 
@@ -259,7 +259,7 @@ def test_memory_manager_rejects_credentials(tmp_path):
     # Attempt to store API key
     ok, msg = manager.remember(
         key="my_gemini_key",
-        content="AIzaSyBvTDYNATJ6Py69Nb3ZqxYa1Lgx5MTZZXg",
+        content="AIzaSyDummyKeyForTesting1234567890abcde",
         category="system"
     )
     assert ok is False

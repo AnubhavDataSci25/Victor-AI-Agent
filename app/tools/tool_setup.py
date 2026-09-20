@@ -175,6 +175,22 @@ def build_tool_registry() -> ToolRegistry:
     except Exception as e:
         logger.warning(f"Coding tools unavailable: {e}")
 
+    # --- Multi-Agent Project Planning Tools ---
+    try:
+        from app.tools.multi_agent.tool import (
+            MultiAgentDownloadArtifactTool,
+            MultiAgentGetStatusTool,
+            MultiAgentReviewTool,
+            MultiAgentStartProjectTool,
+        )
+        registry.register(MultiAgentStartProjectTool())
+        registry.register(MultiAgentReviewTool())
+        registry.register(MultiAgentGetStatusTool())
+        registry.register(MultiAgentDownloadArtifactTool())
+        logger.info("Registered multi-agent planning tools.")
+    except Exception as e:
+        logger.warning(f"Multi-agent tools unavailable: {e}")
+
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")
     return registry
