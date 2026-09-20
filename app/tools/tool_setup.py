@@ -9,13 +9,14 @@ the Gemini Live API path.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 
-def build_tool_registry() -> ToolRegistry:
+def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry:
     """Create and populate a ToolRegistry with all Victor 2.0 tools."""
     registry = ToolRegistry()
 
@@ -190,6 +191,33 @@ def build_tool_registry() -> ToolRegistry:
         logger.info("Registered multi-agent planning tools.")
     except Exception as e:
         logger.warning(f"Multi-agent tools unavailable: {e}")
+
+    # --- File Explorer & Search Tools ---
+    try:
+        from app.config import VictorConfig
+        from app.tools.filesystem.file_explorer import (
+            FileExplorerDeleteTool,
+            FileExplorerMoveTool,
+            FileExplorerOpenTool,
+            FileExplorerRenameTool,
+            FileExplorerSearchTool,
+        )
+        from app.tools.filesystem.path_validation import resolve_allowed_roots
+
+        if allowed_roots is None:
+            fs_config = VictorConfig().filesystem
+            roots = resolve_allowed_roots(fs_config.allowed_roots)
+        else:
+            roots = allowed_roots
+
+        registry.register(FileExplorerSearchTool(roots))
+        registry.register(FileExplorerOpenTool(roots))
+        registry.register(FileExplorerRenameTool(roots))
+        registry.register(FileExplorerMoveTool(roots))
+        registry.register(FileExplorerDeleteTool(roots))
+        logger.info("Registered file explorer & search tools.")
+    except Exception as e:
+        logger.warning(f"File explorer tools unavailable: {e}")
 
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")

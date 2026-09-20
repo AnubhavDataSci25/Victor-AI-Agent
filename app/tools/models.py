@@ -9,7 +9,7 @@ string, never an untyped dict (spec section 32).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -36,7 +36,7 @@ class ToolResult(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
     stdout: str = ""
     stderr: str = ""
-    exit_code: int | None = None
-    error: str | None = None
+    exit_code: Optional[int] = None
+    error: Optional[str] = None
 
     model_config = {"extra": "forbid"}

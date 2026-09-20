@@ -193,7 +193,7 @@ class MoveFileArgs(BaseModel):
 class MoveFileTool(Tool):
     name = "move_file"
     description = "Move a file to a new location. Fails if the destination exists."
-    permission_level = PermissionLevel.MEDIUM
+    permission_level = PermissionLevel.HIGH
     args_model = MoveFileArgs
 
     def __init__(self, allowed_roots: list[Path]) -> None:

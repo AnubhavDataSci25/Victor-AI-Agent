@@ -98,15 +98,31 @@ class ToolRegistry:
                 )
                 return result_str
             else:
-                # v1 Tool: validate, run, verify
+                # v1 Tool: validate, permission check, run, verify
                 validated_args = tool.parse_arguments(args)
+                effective_level = tool.classify(validated_args)
+                is_confirmed = getattr(validated_args, "confirmed", False) or args.get("confirmed", False)
+                decision = self._permission_engine.decide(effective_level, confirmed=is_confirmed)
+                if decision is not PermissionDecision.ALLOWED:
+                    reason = self._permission_engine.explain(effective_level, decision)
+                    duration_ms = (time.monotonic() - start) * 1000
+                    log_tool_call(
+                        tool=tool_name,
+                        arguments=args,
+                        permission_level=effective_level.value,
+                        success=False,
+                        duration_ms=duration_ms,
+                        error="permission_denied",
+                    )
+                    return f"Permission Denied: {reason}"
+
                 result = tool.run(validated_args)
                 result = tool.verify(validated_args, result)
                 duration_ms = (time.monotonic() - start) * 1000
                 log_tool_call(
                     tool=tool_name,
                     arguments=args,
-                    permission_level=tool.permission_level.value,
+                    permission_level=effective_level.value,
                     success=result.success,
                     duration_ms=duration_ms,
                     error=result.error,
@@ -168,7 +184,12 @@ class ToolRegistry:
             self._log(request, tool.permission_level.value, result, start)
             return result
 
-        decision = self._permission_engine.decide(tool.classify(args), confirmed)
+        is_confirmed = (
+            confirmed
+            or getattr(args, "confirmed", False)
+            or bool(request.arguments.get("confirmed", False))
+        )
+        decision = self._permission_engine.decide(tool.classify(args), is_confirmed)
         effective_level = tool.classify(args)
         if decision is not PermissionDecision.ALLOWED:
             reason = self._permission_engine.explain(effective_level, decision)
