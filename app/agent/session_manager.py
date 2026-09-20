@@ -1,29 +1,62 @@
 """
 VictorSessionManager — manages the lifecycle of a single browser
-session from authentication through Gemini Live connection to lockdown.
+session from 2FA authentication (PIN + Windows Hello fingerprint)
+through Gemini Live connection to lockdown.
 """
 
+from __future__ import annotations
+
 import asyncio
-import time
+import base64
 import logging
+from pathlib import Path
+import time
+from typing import Callable, Optional
 
 from app.agent.state import VictorState
+from app.auth.biometric import (
+    BaseBiometricVerifier,
+    BiometricAvailability,
+    BiometricResult,
+    WindowsHelloVerifier,
+)
 from app.auth.manager import AuthManager
 from app.auth.store import SecretStore
 from app.config import load_config
 from app.live.session import LiveSessionManager
+from app.logging import get_logger, log_event
 from app.tools.browser.playwright_driver import PlaywrightBrowserDriver
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agent.session_manager")
+
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "ui" / "static"
+
+
+def _get_dipper_audio(filename: str) -> Optional[str]:
+    """Retrieve pre-generated Gemini Dipper voice PCM audio as base64 string."""
+    audio_path = _STATIC_DIR / filename
+    if audio_path.exists():
+        try:
+            return base64.b64encode(audio_path.read_bytes()).decode("utf-8")
+        except Exception:
+            return None
+    return None
+
 
 
 class VictorSessionManager:
     SESSION_TIMEOUT_SECONDS = 900  # 15 minutes
 
-    def __init__(self, websocket_send_callback):
+    def __init__(
+        self,
+        websocket_send_callback: Callable,
+        biometric_verifier: Optional[BaseBiometricVerifier] = None,
+    ) -> None:
         self.state = VictorState.LOCKED
         self.websocket_send_callback = websocket_send_callback
         self.live_session = LiveSessionManager(self)
+        self.biometric_verifier = biometric_verifier or WindowsHelloVerifier()
+        self._is_verifying_biometric = False
 
         # Load config for auth settings
         self._config = load_config()
@@ -33,6 +66,7 @@ class VictorSessionManager:
 
         # Memory & Context Manager
         from app.memory.manager import MemoryManager
+
         self.memory = MemoryManager(
             db_path=self._config.memory.db_path,
             max_recall_results=self._config.memory.max_recall_results,
@@ -40,14 +74,29 @@ class VictorSessionManager:
 
         # Security: Inactivity tracking
         self.last_activity_time = time.time()
-        self.watchdog_task = None
+        self.watchdog_task: Optional[asyncio.Task] = None
+        self._is_speaking = False
+        self._pending_first_command: Optional[str] = None
+
+    def is_authenticated(self) -> bool:
+        """
+        True ONLY if both PIN and Windows Hello biometric authentication
+        have succeeded and the session is active.
+        Enforces PIN_VERIFIED != AUTHENTICATED.
+        """
+        return self._auth_manager.is_unlocked() and self.state in (
+            VictorState.AUTHENTICATED,
+            VictorState.ACTIVE,
+            VictorState.EXECUTING,
+            VictorState.SPEAKING,
+        )
 
     async def set_state(self, new_state: VictorState):
         self.state = new_state
         self.last_activity_time = time.time()  # Reset timer on state shifts
         await self.websocket_send_callback({
             "type": "session_state",
-            "state": self.state.value
+            "state": self.state.value,
         })
 
     async def _inactivity_watchdog(self):
@@ -64,6 +113,11 @@ class VictorSessionManager:
             pass
 
     async def authenticate(self, credential: str) -> tuple[bool, str]:
+        """
+        Step 1 of 2FA: Verify the PIN.
+        On success, transitions to BIOMETRIC_PENDING.
+        Does NOT connect Gemini Live or allow tools until fingerprint is verified.
+        """
         if self.state not in (VictorState.LOCKED, VictorState.CLOSED):
             return False, "Session is already active."
 
@@ -73,28 +127,196 @@ class VictorSessionManager:
 
         if auth_result.success:
             await self.set_state(VictorState.AUTH_SUCCESS)
+            # Enforce PIN_VERIFIED != AUTHENTICATED: Hold in BIOMETRIC_PENDING
+            await self.set_state(VictorState.BIOMETRIC_PENDING)
+            log_event(logger, logging.INFO, "auth_pin_success_biometric_pending")
+            return True, "PIN verified, Sir. Biometric authentication required."
+        else:
+            await self.set_state(VictorState.LOCKED)
+            log_event(logger, logging.WARNING, "auth_pin_failed")
+            return False, auth_result.message
+
+    @staticmethod
+    def _calculate_pcm_rms(pcm_chunk: bytes) -> float:
+        """Calculates Root Mean Square (RMS) audio energy of 16-bit mono PCM."""
+        if not pcm_chunk or len(pcm_chunk) < 2:
+            return 0.0
+        import struct
+        count = len(pcm_chunk) // 2
+        try:
+            shorts = struct.unpack(f"<{count}h", pcm_chunk[: count * 2])
+            sum_squares = sum(s * s for s in shorts)
+            return (sum_squares / count) ** 0.5
+        except Exception:
+            return 0.0
+
+    async def trigger_biometric_verification(self, command_text: str = "") -> bool:
+        """
+        Step 2 of 2FA: Trigger the native Windows Hello fingerprint verification flow.
+        Invoked when the user says 'Hello Victor' or attempts any command while in BIOMETRIC_PENDING.
+        """
+        if self.state != VictorState.BIOMETRIC_PENDING:
+            return self.is_authenticated()
+
+        if self._is_verifying_biometric:
+            return False
+
+        self._is_verifying_biometric = True
+        if command_text:
+            self._pending_first_command = command_text
+
+        challenge_msg = (
+            "Sir, before moving forward, I need you to verify as Anubhav Sir. "
+            "Please complete fingerprint authentication, then we can move forward."
+        )
+
+        self._is_speaking = True
+
+        # Notify UI and speak challenge
+        await self.websocket_send_callback({
+            "type": "transcript",
+            "role": "assistant",
+            "text": challenge_msg,
+        })
+        dipper_challenge = _get_dipper_audio("challenge_dipper.pcm")
+        if dipper_challenge:
+            await self.websocket_send_callback({
+                "type": "audio_output",
+                "data": dipper_challenge,
+            })
+        else:
+            await self.websocket_send_callback({
+                "type": "speak",
+                "text": challenge_msg,
+            })
+        await self.websocket_send_callback({
+            "type": "orb_state",
+            "state": "THINKING",
+        })
+
+        # 1. Check availability
+        availability = await self.biometric_verifier.check_availability()
+        if availability != BiometricAvailability.AVAILABLE:
+            self._is_speaking = False
+            log_event(logger, logging.WARNING, "biometric_not_available", availability=availability.value)
+            await self.websocket_send_callback({
+                "type": "transcript",
+                "role": "assistant",
+                "text": f"Fingerprint verification unavailable ({availability.value}). Access denied.",
+            })
+            await self._handle_auth_failure(f"Fingerprint hardware unavailable ({availability.value}).")
+            return False
+
+        # 2. Invoke native Windows Hello
+        result = await self.biometric_verifier.request_verification(
+            "Please verify your fingerprint to authenticate as Anubhav Sir."
+        )
+
+        if result == BiometricResult.VERIFIED:
+            self._auth_manager.verify_biometric(True)
+            await self.set_state(VictorState.AUTHENTICATED)
+
+            # Interrupt any ongoing challenge audio immediately so greeting starts clean
+            await self.websocket_send_callback({
+                "type": "audio_interrupted",
+            })
+
+            success_msg = "Hello Anubhav Sir. Verification successful. How can I help you?"
+            await self.websocket_send_callback({
+                "type": "transcript",
+                "role": "assistant",
+                "text": success_msg,
+            })
+            dipper_success = _get_dipper_audio("success_dipper.pcm")
+            if dipper_success:
+                await self.websocket_send_callback({
+                    "type": "audio_output",
+                    "data": dipper_success,
+                })
+            else:
+                await self.websocket_send_callback({
+                    "type": "speak",
+                    "text": success_msg,
+                })
+
+            # Wait for greeting to finish speaking in browser so Gemini Live will never hear Victor's own voice
+            self._is_speaking = True
+            await asyncio.sleep(4.8 if dipper_success else 3.2)
+            self._is_speaking = False
+
+            await self.websocket_send_callback({
+                "type": "greeting_complete",
+            })
+
+            # Connect to Gemini Live with clean microphone state
             await self.set_state(VictorState.CONNECTING)
             connected = await self.live_session.start()
 
             if connected:
                 await self.set_state(VictorState.ACTIVE)
-                # Start the security watchdog
                 self.watchdog_task = asyncio.create_task(self._inactivity_watchdog())
-                return True, auth_result.message
+                self._is_verifying_biometric = False
+                log_event(logger, logging.INFO, "biometric_auth_complete_session_active")
+                return True
             else:
                 await self.set_state(VictorState.ERROR)
-                return False, "Failed to connect to Gemini Live session."
+                self._is_verifying_biometric = False
+                return False
         else:
-            await self.set_state(VictorState.LOCKED)
-            return False, auth_result.message
+            self._is_speaking = False
+            log_event(logger, logging.WARNING, "biometric_auth_failed", result=result.value)
+            await self._handle_auth_failure(f"Fingerprint verification unsuccessful: {result.value}")
+            return False
+
+    async def _handle_auth_failure(self, reason: str):
+        """
+        Handle biometric verification failure, cancellation, timeout, or unconfigured hardware.
+        Immediately blocks commands/tools, terminates session, closes browser, and resets.
+        """
+        self._is_verifying_biometric = False
+        self._is_speaking = False
+        self._auth_manager.verify_biometric(False)
+
+        await self.websocket_send_callback({
+            "type": "auth_result",
+            "success": False,
+            "message": reason,
+        })
+        await self.lock()
 
     async def handle_audio_input(self, pcm_chunk: bytes):
-        if self.state == VictorState.ACTIVE:
-            self.last_activity_time = time.time()  # Reset watchdog on speech
-            self._auth_manager.touch_activity()
-            await self.live_session.send_audio(pcm_chunk)
+        """Handle incoming PCM audio from client mic."""
+        # Acoustic echo suppression: ignore mic audio while Victor is speaking
+        if self._is_speaking:
+            return
+
+        # Strictly stream only when session is ACTIVE; ignore during BIOMETRIC_PENDING or locks
+        if self.state != VictorState.ACTIVE:
+            return
+
+        self.last_activity_time = time.time()  # Reset watchdog on speech
+        self._auth_manager.touch_activity()
+        await self.live_session.send_audio(pcm_chunk)
+
+    async def handle_command(self, command_text: str) -> bool:
+        """Handle incoming text or voice command from user."""
+        if self.state == VictorState.BIOMETRIC_PENDING:
+            await self.trigger_biometric_verification(command_text=command_text)
+            return False
+
+        if not self.is_authenticated():
+            logger.warning("Command attempted while session is not authenticated.")
+            return False
+
+        self.last_activity_time = time.time()
+        self._auth_manager.touch_activity()
+        return True
 
     async def lock(self):
+        """
+        Terminates the active session, stops Victor's dedicated Playwright browser driver,
+        clears memory, and transitions to CLOSED.
+        """
         await self.set_state(VictorState.LOCKING)
 
         if self.watchdog_task:

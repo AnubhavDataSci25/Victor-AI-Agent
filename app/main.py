@@ -80,10 +80,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 await ws_send({"type": "auth_result", "success": success, "message": message})
                 
             elif msg_type == "audio_input":
-                if session_manager.state == VictorState.ACTIVE:
+                if session_manager.state in (VictorState.ACTIVE, VictorState.BIOMETRIC_PENDING):
                     pcm_chunk = base64.b64decode(payload.get("data", ""))
                     await session_manager.handle_audio_input(pcm_chunk)
-                    
+
+            elif msg_type == "user_command":
+                cmd_text = payload.get("text", "")
+                await session_manager.handle_command(cmd_text)
+
+            elif msg_type == "biometric_request":
+                await session_manager.trigger_biometric_verification()
+
             elif msg_type == "lock_request":
                 await session_manager.lock()
 

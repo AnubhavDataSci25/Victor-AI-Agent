@@ -40,7 +40,9 @@ logger = get_logger("auth.manager")
 
 class AuthState(str, Enum):
     LOCKED = "LOCKED"
-    UNLOCKED = "UNLOCKED"
+    PIN_VERIFIED = "PIN_VERIFIED"
+    AUTHENTICATED = "AUTHENTICATED"
+    UNLOCKED = "AUTHENTICATED"  # Backward-compatible alias for AUTHENTICATED
 
 
 @dataclass
@@ -84,10 +86,15 @@ class AuthManager:
 
     def is_unlocked(self) -> bool:
         """
-        True if currently UNLOCKED. Victor stays active after successful
-        verification until the user explicitly locks it.
+        True ONLY if fully AUTHENTICATED (both factors verified).
+        Enforces PIN_VERIFIED != AUTHENTICATED. Victor stays active after
+        successful 2FA verification until explicitly locked or timed out.
         """
-        return self._state is AuthState.UNLOCKED
+        return self._state is AuthState.AUTHENTICATED
+
+    def is_pin_verified(self) -> bool:
+        """True if the user has completed at least the first factor (PIN)."""
+        return self._state in (AuthState.PIN_VERIFIED, AuthState.AUTHENTICATED)
 
     def is_configured(self) -> bool:
         return self._store.is_configured()
@@ -123,10 +130,9 @@ class AuthManager:
         if stored_hash and verify_phrase(candidate, stored_hash):
             self._failed_attempts = 0
             self._lockout_until = None
-            self._state = AuthState.UNLOCKED
-            self._session.start()
-            log_event(logger, logging.INFO, "auth_success")
-            return AuthResult(success=True, message="Verified, Sir.")
+            self._state = AuthState.PIN_VERIFIED
+            log_event(logger, logging.INFO, "auth_pin_verified")
+            return AuthResult(success=True, message="PIN verified, Sir. Biometric authentication required.")
 
         self._failed_attempts += 1
         log_event(
@@ -153,16 +159,33 @@ class AuthManager:
 
         return AuthResult(success=False, message="Verification failed, Sir.")
 
+    def verify_biometric(self, verified: bool) -> bool:
+        """
+        Completes the 2FA verification with biometric/Windows Hello.
+        Transitions PIN_VERIFIED -> AUTHENTICATED only if verified is True.
+        Any failure locks the system immediately.
+        """
+        if self._state is AuthState.PIN_VERIFIED and verified:
+            self._state = AuthState.AUTHENTICATED
+            self._session.start()
+            log_event(logger, logging.INFO, "auth_biometric_success")
+            return True
+
+        self.lock()
+        log_event(logger, logging.WARNING, "auth_biometric_failure")
+        return False
+
     def touch_activity(self) -> None:
         """Record activity for the currently authenticated session."""
-        if self._state is AuthState.UNLOCKED:
+        if self.is_unlocked():
             self._session.extend()
 
     def lock(self) -> None:
         """Manual lock (spec section 10: 'Victor, lock yourself' / UI button),
-        also used internally on session timeout."""
-        was_unlocked = self._state is AuthState.UNLOCKED
+        also used internally on session timeout or auth failure."""
+        was_active = self._state in (AuthState.AUTHENTICATED, AuthState.PIN_VERIFIED)
         self._state = AuthState.LOCKED
         self._session.end()
-        if was_unlocked:
+        if was_active:
             log_event(logger, logging.INFO, "auth_locked")
+

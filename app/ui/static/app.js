@@ -42,8 +42,12 @@ let micAnalyser = null;
 let speakerAnalyser = null;
 let nextPlayTime = 0;
 let isSpeaking = false;
+let isVictorSpeaking = false;
+let micMutedUntil = 0;
 let mediaStream = null;
 let activeAudioSources = [];
+let firstCommandRecognizer = null;
+let currentUtterance = null; // Preserved in outer scope to prevent V8 GC bug with SpeechSynthesis
 
 // ==========================================================================
 // REAL-TIME CHRONO TELEMETRY (CLOCK & DATE)
@@ -78,14 +82,22 @@ updateChronoTelemetry();
 // AUDIO PIPELINE (16kHz PCM Input / 24kHz PCM Output)
 // ==========================================================================
 async function startAudioPipeline() {
-    if (audioCtx) return;
+    if (audioCtx) {
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+        }
+        return;
+    }
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+        }
         mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
+                echoCancellation: { ideal: true },
+                noiseSuppression: { ideal: true },
+                autoGainControl: { ideal: true },
                 channelCount: 1,
                 sampleRate: 16000
             }
@@ -107,7 +119,11 @@ async function startAudioPipeline() {
         // Capture Processor for streaming to backend
         scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
         scriptProcessor.onaudioprocess = (e) => {
+            // Only stream during active conversation session
             if (currentState !== "ACTIVE" && currentState !== "LISTENING" && currentState !== "SPEAKING") return;
+
+            // Acoustic echo suppression: drop mic packets while Victor's pre-auth SpeechSynthesis is speaking
+            if (isVictorSpeaking) return;
 
             const inputData = e.inputBuffer.getChannelData(0);
             const pcm16 = new Int16Array(inputData.length);
@@ -157,6 +173,7 @@ function stopAllAudioPlayback() {
 }
 
 function stopAudioPipeline() {
+    stopFirstCommandListener();
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -172,6 +189,8 @@ function stopAudioPipeline() {
     speakerAnalyser = null;
     nextPlayTime = 0;
     isSpeaking = false;
+    isVictorSpeaking = false;
+    micMutedUntil = 0;
     
     console.log("[Victor Audio] Hardware pipeline torn down securely.");
 }
@@ -247,11 +266,14 @@ function playAudioChunk(base64Data) {
     nextPlayTime += audioBuffer.duration;
 
     isSpeaking = true;
+    isVictorSpeaking = true;
     source.onended = () => {
         const idx = activeAudioSources.indexOf(source);
         if (idx !== -1) activeAudioSources.splice(idx, 1);
         if (activeAudioSources.length === 0 || audioCtx.currentTime >= nextPlayTime - 0.02) {
             isSpeaking = false;
+            isVictorSpeaking = false;
+            micMutedUntil = Date.now() + 500; // Room reverb decay
         }
     };
 }
@@ -738,6 +760,65 @@ if (!checkLockoutState()) {
 }
 
 // ==========================================================================
+// FIRST COMMAND LISTENER (PRE-AUTHENTICATION VOICE CAPTURE)
+// ==========================================================================
+function startFirstCommandListener() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        console.warn("[Victor Speech] Web Speech API not supported in this browser.");
+        return;
+    }
+    if (firstCommandRecognizer) {
+        try { firstCommandRecognizer.stop(); } catch (_) {}
+    }
+
+    try {
+        firstCommandRecognizer = new SpeechRecognition();
+        firstCommandRecognizer.continuous = true;
+        firstCommandRecognizer.interimResults = false;
+        firstCommandRecognizer.lang = 'en-US';
+
+        firstCommandRecognizer.onresult = (event) => {
+            if (currentState !== "BIOMETRIC_PENDING") return;
+            const lastIndex = event.results.length - 1;
+            const transcript = event.results[lastIndex][0].transcript.trim();
+            if (transcript.length > 0) {
+                console.log("[Victor First Command Detected]:", transcript);
+                stopFirstCommandListener();
+                appendTranscriptEntry("user", transcript);
+                ws.send(JSON.stringify({
+                    type: "user_command",
+                    text: transcript
+                }));
+            }
+        };
+
+        firstCommandRecognizer.onerror = (err) => {
+            console.warn("[Victor First Command Recognizer Error]:", err);
+        };
+
+        firstCommandRecognizer.onend = () => {
+            if (currentState === "BIOMETRIC_PENDING" && firstCommandRecognizer) {
+                try { firstCommandRecognizer.start(); } catch (_) {}
+            }
+        };
+
+        firstCommandRecognizer.start();
+        console.log("[Victor First Command Listener] Waiting for first spoken command from Anubhav Sir...");
+    } catch (err) {
+        console.error("Failed to start first command recognizer:", err);
+    }
+}
+
+function stopFirstCommandListener() {
+    if (firstCommandRecognizer) {
+        const rec = firstCommandRecognizer;
+        firstCommandRecognizer = null;
+        try { rec.abort(); } catch (_) {}
+    }
+}
+
+// ==========================================================================
 // STATE & WEBSOCKET MANAGEMENT
 // ==========================================================================
 ws.onmessage = (event) => {
@@ -750,18 +831,38 @@ ws.onmessage = (event) => {
             updateUIState(currentState);
 
             if (currentState === "LOCKED" || currentState === "CLOSED" || currentState === "OFFLINE") {
+                stopFirstCommandListener();
+                try { window.speechSynthesis.cancel(); } catch (_) {}
+                isVictorSpeaking = false;
+                currentUtterance = null;
+                micMutedUntil = 0;
                 if (authOverlay) {
                     authOverlay.style.display = "flex";
                     authOverlay.style.opacity = "1";
                 }
                 resetPINBoard();
                 stopAudioPipeline();
-            } else if (currentState === "ACTIVE") {
+            } else if (currentState === "BIOMETRIC_PENDING") {
                 if (authOverlay) {
                     authOverlay.style.opacity = "0";
                     setTimeout(() => {
                         authOverlay.style.display = "none";
                     }, 400);
+                }
+                startAudioPipeline().catch(err => console.warn("Audio pipeline init:", err));
+                startFirstCommandListener();
+            } else if (currentState === "ACTIVE") {
+                stopFirstCommandListener();
+                try { window.speechSynthesis.cancel(); } catch (_) {}
+                isVictorSpeaking = false;
+                currentUtterance = null;
+                micMutedUntil = 0;
+                if (authOverlay) {
+                    authOverlay.style.display = "none";
+                }
+                startAudioPipeline().catch(err => console.warn("Audio pipeline init:", err));
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
                 }
             }
 
@@ -770,6 +871,37 @@ ws.onmessage = (event) => {
 
         } else if (message.type === "transcript") {
             appendTranscriptEntry(message.role, message.text);
+
+        } else if (message.type === "speak") {
+            if ('speechSynthesis' in window && message.text) {
+                try { window.speechSynthesis.cancel(); } catch (_) {}
+                isVictorSpeaking = true;
+                currentUtterance = new SpeechSynthesisUtterance(message.text);
+                currentUtterance.rate = 1.0;
+                currentUtterance.pitch = 1.0;
+                currentUtterance.onstart = () => {
+                    isVictorSpeaking = true;
+                };
+                currentUtterance.onend = () => {
+                    isVictorSpeaking = false;
+                    currentUtterance = null;
+                };
+                currentUtterance.onerror = () => {
+                    isVictorSpeaking = false;
+                    currentUtterance = null;
+                };
+                window.speechSynthesis.speak(currentUtterance);
+            }
+
+        } else if (message.type === "greeting_complete") {
+            console.log("[Victor Audio] Greeting complete, mic unmuting cleanly for Gemini Live.");
+            try { window.speechSynthesis.cancel(); } catch (_) {}
+            isVictorSpeaking = false;
+            currentUtterance = null;
+            micMutedUntil = 0;
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
 
         } else if (message.type === "tool_execution") {
             appendTranscriptEntry("tool", `🔧 Executing tool: ${message.tool} (${message.status})`);
@@ -783,6 +915,12 @@ ws.onmessage = (event) => {
                 if (pinStatusText) {
                     pinStatusText.innerHTML = `<span style="color: var(--accent-rose);">${message.message || "Authentication failed."}</span>`;
                 }
+                if (authOverlay) {
+                    authOverlay.style.display = "flex";
+                    authOverlay.style.opacity = "1";
+                }
+                resetPINBoard();
+                stopAudioPipeline();
             }
 
         } else if (message.type === "audio_output") {

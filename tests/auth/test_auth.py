@@ -98,11 +98,18 @@ def test_auth_manager_lifecycle():
         simulated_time += 61.0
         assert manager.is_locked_out() is False
 
-        # Successful auth with spaces (PIN normalization)
+        # Step 1: Successful auth with spaces (PIN normalization) -> transitions to PIN_VERIFIED
         res_ok = manager.authenticate(" 1 2 3 4 ")
         assert res_ok.success is True
+        assert manager.state == AuthState.PIN_VERIFIED
+        # Enforce PIN_VERIFIED != AUTHENTICATED
+        assert manager.is_unlocked() is False
+
+        # Step 2: Biometric verification completes authentication
+        bio_ok = manager.verify_biometric(True)
+        assert bio_ok is True
         assert manager.is_unlocked() is True
-        assert manager.state == AuthState.UNLOCKED
+        assert manager.state == AuthState.AUTHENTICATED
 
         # Manual lock
         manager.lock()
@@ -114,13 +121,20 @@ async def test_victor_session_manager_auth_integration():
     from unittest.mock import AsyncMock
     from app.agent.session_manager import VictorSessionManager
     from app.agent.state import VictorState
+    from app.auth.biometric import BaseBiometricVerifier, BiometricAvailability, BiometricResult
+
+    class MockVerifier(BaseBiometricVerifier):
+        async def check_availability(self):
+            return BiometricAvailability.AVAILABLE
+        async def request_verification(self, prompt: str = ""):
+            return BiometricResult.VERIFIED
 
     events = []
 
     async def mock_ws_send(data):
         events.append(data)
 
-    sm = VictorSessionManager(websocket_send_callback=mock_ws_send)
+    sm = VictorSessionManager(websocket_send_callback=mock_ws_send, biometric_verifier=MockVerifier())
     # Mock out live_session.start so it does not connect to live Gemini over network in unit test
     sm.live_session.start = AsyncMock(return_value=True)
 
@@ -129,10 +143,15 @@ async def test_victor_session_manager_auth_integration():
     assert success is False
     assert sm.state == VictorState.LOCKED
 
-    # Correct PIN
+    # Correct PIN -> Enters BIOMETRIC_PENDING without starting Gemini Live
     success, msg = await sm.authenticate("081225")
     assert success is True
-    assert msg == "Verified, Sir."
+    assert sm.state == VictorState.BIOMETRIC_PENDING
+    sm.live_session.start.assert_not_called()
+
+    # User initiates interaction -> triggers biometric verification -> ACTIVE
+    bio_success = await sm.trigger_biometric_verification()
+    assert bio_success is True
     assert sm.state == VictorState.ACTIVE
     sm.live_session.start.assert_awaited_once()
 

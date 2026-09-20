@@ -42,7 +42,14 @@ class LiveToolDispatcher:
 
         logger.info(f"[Tool Gateway] Gemini requested: '{tool_name}'")
 
-        # 1. Security Check: Session must be active
+        # 1. Security Check: Session must be fully authenticated with 2FA (PIN + Biometric) and active
+        if hasattr(self.session_manager, "is_authenticated") and not self.session_manager.is_authenticated():
+            return self._build_error(
+                tool_name,
+                call_id,
+                "Access Denied: Victor session is not authenticated with biometric verification."
+            )
+
         if self.session_manager.state not in (VictorState.ACTIVE, VictorState.EXECUTING, VictorState.SPEAKING):
             return self._build_error(tool_name, call_id, "Access Denied: Victor session is locked or inactive.")
 
