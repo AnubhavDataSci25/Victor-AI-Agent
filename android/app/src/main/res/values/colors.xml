@@ -1,0 +1,9 @@
+<resources>
+    <color name="bg_primary">#02050B</color>
+    <color name="bg_surface">#0A1628</color>
+    <color name="accent_cyan">#00E5FF</color>
+    <color name="accent_emerald">#00F5A0</color>
+    <color name="accent_rose">#FF3366</color>
+    <color name="text_primary">#F0F6FC</color>
+    <color name="text_secondary">#8BA2BE</color>
+</resources>

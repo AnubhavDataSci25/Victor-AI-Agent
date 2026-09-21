@@ -925,6 +925,22 @@ ws.onmessage = (event) => {
 
         } else if (message.type === "audio_output") {
             playAudioChunk(message.data);
+
+        } else if (message.type === "phone_status") {
+            updatePhoneStatus(message);
+
+        } else if (message.type === "phone_pairing_data") {
+            updatePairingModalData(message);
+
+        } else if (message.type === "phone_incoming_call") {
+            if (message.status === "RINGING") {
+                showIncomingCallBanner(message.caller_name, message.caller_number, message.call_type);
+            } else {
+                hideIncomingCallBanner();
+            }
+
+        } else if (message.type === "phone_alert") {
+            console.log(`[Victor Phone Alert] ${message.source}: ${message.text}`);
         }
     } catch (e) {
         console.error("Error parsing WebSocket message:", e);
@@ -935,5 +951,186 @@ ws.onmessage = (event) => {
 if (lockBtn) {
     lockBtn.addEventListener('click', () => {
         ws.send(JSON.stringify({ type: "lock_request" }));
+    });
+}
+
+// ==========================================================================
+// COMMAND TEXT INPUT HANDLING
+// ==========================================================================
+const commandForm = document.getElementById("commandForm");
+const commandTextInput = document.getElementById("commandTextInput");
+
+if (commandForm && commandTextInput) {
+    commandForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = commandTextInput.value.trim();
+        if (!text) return;
+
+        // Check if session is locked
+        if (currentState === "LOCKED" || currentState === "CLOSED" || currentState === "OFFLINE") {
+            if (pinStatusText) {
+                pinStatusText.innerHTML = `<span style="color: var(--accent-amber);">Please unlock Victor with your PIN first.</span>`;
+            }
+            if (authOverlay) {
+                authOverlay.style.display = "flex";
+                authOverlay.style.opacity = "1";
+            }
+            return;
+        }
+
+        // If in BIOMETRIC_PENDING, stop speech listener to avoid conflicting triggers
+        if (currentState === "BIOMETRIC_PENDING") {
+            stopFirstCommandListener();
+        }
+
+        // Display user command in transcript
+        appendTranscriptEntry("user", text);
+
+        // Send command to backend over unified WebSocket channel
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "user_command",
+                text: text,
+            }));
+        }
+
+        // Clear input
+        commandTextInput.value = "";
+    });
+}
+
+// ==========================================================================
+// PHONE COMPANION CONTROLLER
+// ==========================================================================
+const phoneStatusBtn = document.getElementById("phoneStatusBtn");
+const phoneStatusDot = document.getElementById("phoneStatusDot");
+const phoneStatusLabel = document.getElementById("phoneStatusLabel");
+
+const incomingCallBanner = document.getElementById("incomingCallBanner");
+const callTypeBadge = document.getElementById("callTypeBadge");
+const callerNameDisplay = document.getElementById("callerNameDisplay");
+const callerNumberDisplay = document.getElementById("callerNumberDisplay");
+const btnAnswerCall = document.getElementById("btnAnswerCall");
+const btnRejectCall = document.getElementById("btnRejectCall");
+
+const phonePairingModal = document.getElementById("phonePairingModal");
+const btnClosePhoneModal = document.getElementById("btnClosePhoneModal");
+const modalPhoneStatus = document.getElementById("modalPhoneStatus");
+const modalPhoneDevice = document.getElementById("modalPhoneDevice");
+const modalPhoneBattery = document.getElementById("modalPhoneBattery");
+const pairingServerAddress = document.getElementById("pairingServerAddress");
+const pairingPinDisplay = document.getElementById("pairingPinDisplay");
+const btnGeneratePairingCode = document.getElementById("btnGeneratePairingCode");
+const btnUnpairPhone = document.getElementById("btnUnpairPhone");
+
+function updatePhoneStatus(data) {
+    const status = data.status || "UNPAIRED";
+    const deviceName = data.device_name || "Android Phone";
+
+    if (phoneStatusDot) {
+        phoneStatusDot.classList.remove("is-online", "is-offline");
+        if (status === "ONLINE") {
+            phoneStatusDot.classList.add("is-online");
+        } else if (status === "OFFLINE") {
+            phoneStatusDot.classList.add("is-offline");
+        }
+    }
+
+    if (phoneStatusLabel) {
+        if (status === "ONLINE") {
+            phoneStatusLabel.textContent = `PHONE: ${deviceName.toUpperCase()}`;
+        } else if (status === "OFFLINE") {
+            phoneStatusLabel.textContent = `PHONE: OFFLINE`;
+        } else {
+            phoneStatusLabel.textContent = `PHONE: NOT PAIRED`;
+        }
+    }
+
+    if (modalPhoneStatus) modalPhoneStatus.textContent = status;
+    if (modalPhoneDevice) modalPhoneDevice.textContent = data.paired ? deviceName : "None";
+    if (modalPhoneBattery) {
+        if (data.battery_level !== null && data.battery_level !== undefined) {
+            modalPhoneBattery.textContent = `${data.battery_level}%${data.is_charging ? " (Charging)" : ""}`;
+        } else {
+            modalPhoneBattery.textContent = "--";
+        }
+    }
+}
+
+function updatePairingModalData(data) {
+    if (pairingServerAddress) {
+        pairingServerAddress.textContent = `ws://${data.ip}:${data.port}/ws/phone`;
+    }
+    if (pairingPinDisplay) {
+        pairingPinDisplay.textContent = data.pin || "------";
+    }
+}
+
+function showIncomingCallBanner(callerName, callerNumber, callType) {
+    if (!incomingCallBanner) return;
+    if (callerNameDisplay) callerNameDisplay.textContent = callerName || "Unknown Caller";
+    if (callerNumberDisplay) callerNumberDisplay.textContent = callerNumber || "";
+    if (callTypeBadge) {
+        callTypeBadge.textContent = callType === "whatsapp" ? "INCOMING WHATSAPP CALL" : "INCOMING PHONE CALL";
+    }
+    incomingCallBanner.classList.remove("hidden");
+}
+
+function hideIncomingCallBanner() {
+    if (incomingCallBanner) {
+        incomingCallBanner.classList.add("hidden");
+    }
+}
+
+if (phoneStatusBtn) {
+    phoneStatusBtn.addEventListener("click", () => {
+        if (phonePairingModal) {
+            phonePairingModal.classList.remove("hidden");
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "phone_pair_init" }));
+            }
+        }
+    });
+}
+
+if (btnClosePhoneModal) {
+    btnClosePhoneModal.addEventListener("click", () => {
+        if (phonePairingModal) phonePairingModal.classList.add("hidden");
+    });
+}
+
+if (btnGeneratePairingCode) {
+    btnGeneratePairingCode.addEventListener("click", () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "phone_pair_init" }));
+        }
+    });
+}
+
+if (btnUnpairPhone) {
+    btnUnpairPhone.addEventListener("click", () => {
+        if (confirm("Revoke companion phone pairing? The phone will no longer be able to connect.")) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "phone_unpair" }));
+            }
+        }
+    });
+}
+
+if (btnAnswerCall) {
+    btnAnswerCall.addEventListener("click", () => {
+        hideIncomingCallBanner();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "phone_answer_call" }));
+        }
+    });
+}
+
+if (btnRejectCall) {
+    btnRejectCall.addEventListener("click", () => {
+        hideIncomingCallBanner();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "phone_reject_call" }));
+        }
     });
 }

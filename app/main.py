@@ -50,6 +50,13 @@ async def root():
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
 
+from app.phone.server import get_local_ip, phone_server
+
+@app.websocket("/ws/phone")
+async def websocket_phone_endpoint(websocket: WebSocket):
+    await phone_server.handle_websocket(websocket)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -64,9 +71,20 @@ async def websocket_endpoint(websocket: WebSocket):
     # Each browser tab gets its own isolated session manager
     session_manager = VictorSessionManager(websocket_send_callback=ws_send)
     
+    # Connect phone server with active browser session
+    phone_server.set_ui_notify_callback(ws_send)
+    phone_server.gateway.set_session_manager(session_manager)
+
     await ws_send({
         "type": "session_state",
         "state": session_manager.state.value
+    })
+
+    # Send initial phone companion status
+    phone_status = phone_server.gateway.get_status()
+    await ws_send({
+        "type": "phone_status",
+        **phone_status,
     })
     
     try:
@@ -93,6 +111,47 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "lock_request":
                 await session_manager.lock()
+
+            elif msg_type == "phone_pair_init":
+                token, pin, expires_at = phone_server.device_manager.initiate_pairing()
+                lan_ip = get_local_ip()
+                config = load_config()
+                await ws_send({
+                    "type": "phone_pairing_data",
+                    "ip": lan_ip,
+                    "port": config.port,
+                    "token": token,
+                    "pin": pin,
+                    "expires_at": expires_at,
+                })
+
+            elif msg_type == "phone_unpair":
+                res = phone_server.gateway.unpair()
+                await ws_send({
+                    "type": "phone_status",
+                    **phone_server.gateway.get_status(),
+                })
+                await ws_send({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": res.get("message", "Phone unpaired."),
+                })
+
+            elif msg_type == "phone_answer_call":
+                res = await phone_server.gateway.answer_call()
+                await ws_send({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": res.get("message", "Call answered."),
+                })
+
+            elif msg_type == "phone_reject_call":
+                res = await phone_server.gateway.reject_call()
+                await ws_send({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": res.get("message", "Call rejected."),
+                })
 
     except WebSocketDisconnect:
         logger.info("Browser disconnected.")

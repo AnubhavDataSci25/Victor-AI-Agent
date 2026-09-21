@@ -41,3 +41,15 @@ logs/
 # Playwright
 playwright-report/
 test-results/
+
+# SQLite temporary files
+*.db-shm
+*.db-wal
+
+# Android builds & caches
+android/.gradle/
+android/local.properties
+android/**/build/
+android/.idea/
+android/*.iml
+android/**/*.iml

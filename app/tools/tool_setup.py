@@ -89,15 +89,35 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     # --- System Tools ---
     try:
         from app.tools.system.tool import (
+            SystemAdjustBrightnessTool,
+            SystemAdjustVolumeTool,
+            SystemGetBatteryTool,
+            SystemGetBluetoothTool,
+            SystemGetBrightnessTool,
             SystemGetInfoTool,
+            SystemGetNetworkTool,
+            SystemGetNotificationsTool,
+            SystemGetPerformanceTool,
             SystemGetTimeTool,
+            SystemGetVolumeTool,
             SystemLockVictorTool,
             SystemLockWindowsTool,
-            SystemVolumeTool,
+            SystemOpenNotificationPanelTool,
+            SystemOpenSettingsTool,
         )
         registry.register(SystemGetTimeTool())
         registry.register(SystemGetInfoTool())
-        registry.register(SystemVolumeTool())
+        registry.register(SystemGetBatteryTool())
+        registry.register(SystemGetNetworkTool())
+        registry.register(SystemGetBluetoothTool())
+        registry.register(SystemGetBrightnessTool())
+        registry.register(SystemAdjustBrightnessTool())
+        registry.register(SystemGetVolumeTool())
+        registry.register(SystemAdjustVolumeTool())
+        registry.register(SystemGetPerformanceTool())
+        registry.register(SystemGetNotificationsTool())
+        registry.register(SystemOpenNotificationPanelTool())
+        registry.register(SystemOpenSettingsTool())
         registry.register(SystemLockWindowsTool())
         registry.register(SystemLockVictorTool())
         logger.info("Registered system tools.")
@@ -151,6 +171,28 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         logger.info("Registered web app tools.")
     except Exception as e:
         logger.warning(f"Web app tools unavailable: {e}")
+
+    # --- Google Services Tools ---
+    try:
+        from app.tools.google.tool import (
+            GoogleCalendarCreateEventTool,
+            GoogleCalendarOpenTool,
+            GoogleKeepCreateNoteTool,
+            GoogleKeepOpenTool,
+            GoogleKeepSearchNotesTool,
+            GoogleMeetCreateTool,
+            GoogleMeetJoinTool,
+        )
+        registry.register(GoogleKeepCreateNoteTool())
+        registry.register(GoogleKeepSearchNotesTool())
+        registry.register(GoogleKeepOpenTool())
+        registry.register(GoogleCalendarCreateEventTool())
+        registry.register(GoogleCalendarOpenTool())
+        registry.register(GoogleMeetCreateTool())
+        registry.register(GoogleMeetJoinTool())
+        logger.info("Registered Google services tools.")
+    except Exception as e:
+        logger.warning(f"Google services tools unavailable: {e}")
 
     # --- Coding Computer Control Tools ---
     try:
@@ -218,6 +260,40 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         logger.info("Registered file explorer & search tools.")
     except Exception as e:
         logger.warning(f"File explorer tools unavailable: {e}")
+
+    # --- Current Affairs & Updates Tools ---
+    try:
+        from app.tools.news.tool import (
+            CurrentAffairsGetUpdatesTool,
+            CurrentAffairsOpenStoryTool,
+        )
+        registry.register(CurrentAffairsGetUpdatesTool())
+        registry.register(CurrentAffairsOpenStoryTool())
+        logger.info("Registered current affairs & updates tools.")
+    except Exception as e:
+        logger.warning(f"Current affairs tools unavailable: {e}")
+
+    # --- Phone Companion Automation Tools ---
+    try:
+        from app.phone.tools import (
+            PhoneAnswerCallTool,
+            PhoneGetStatusTool,
+            PhoneInitiateCallTool,
+            PhoneLaunchYouTubeTool,
+            PhoneRejectCallTool,
+            PhoneResolveContactTool,
+            PhoneUnpairTool,
+        )
+        registry.register(PhoneGetStatusTool())
+        registry.register(PhoneResolveContactTool())
+        registry.register(PhoneInitiateCallTool())
+        registry.register(PhoneAnswerCallTool())
+        registry.register(PhoneRejectCallTool())
+        registry.register(PhoneLaunchYouTubeTool())
+        registry.register(PhoneUnpairTool())
+        logger.info("Registered phone companion automation tools.")
+    except Exception as e:
+        logger.warning(f"Phone tools unavailable: {e}")
 
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")

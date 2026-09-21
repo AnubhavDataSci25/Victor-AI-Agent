@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Victor Companion</string>
+    <string name="channel_name">Victor Companion Service</string>
+    <string name="channel_desc">Maintains secure background connection to Victor PC</string>
+</resources>

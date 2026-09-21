@@ -779,6 +779,92 @@ body::before {
     color: #ffd27f;
 }
 
+/* Command Text Input Container */
+.command-input-container {
+    margin: 8px 0 6px;
+    width: 100%;
+    position: relative;
+    z-index: 5;
+}
+
+.command-form {
+    width: 100%;
+}
+
+.command-input-wrapper {
+    display: flex;
+    align-items: center;
+    background: rgba(4, 14, 28, 0.78);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 3px 5px 3px 12px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.command-input-wrapper:focus-within {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.25), inset 0 2px 6px rgba(0, 0, 0, 0.5);
+    background: rgba(6, 18, 38, 0.92);
+}
+
+.command-input-prefix {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    margin-right: 8px;
+    user-select: none;
+}
+
+.command-text-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    line-height: 1.4;
+    padding: 6px 0;
+}
+
+.command-text-input::placeholder {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-family: var(--font-sans);
+}
+
+.command-send-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    background: linear-gradient(135deg, rgba(0, 119, 255, 0.8), rgba(0, 229, 255, 0.8));
+    border: none;
+    border-radius: var(--radius-sm);
+    color: #ffffff;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+}
+
+.command-send-btn:hover {
+    background: linear-gradient(135deg, #0088ff, #00e5ff);
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.45);
+    transform: scale(1.05);
+}
+
+.command-send-btn:active {
+    transform: scale(0.95);
+}
+
+.command-send-btn .send-icon {
+    width: 14px;
+    height: 14px;
+}
+
 /* Transcript Bottom Info Bar */
 .transcript-bottom-bar {
     display: flex;
@@ -1257,6 +1343,11 @@ body::before {
             </div>
 
             <div class="topbar-right">
+                <button id="phoneStatusBtn" class="phone-btn" type="button" title="Victor Android Phone Companion">
+                    <span class="phone-status-dot" id="phoneStatusDot"></span>
+                    <span class="phone-icon">📱</span>
+                    <span id="phoneStatusLabel" class="phone-label">PHONE: DISCONNECTED</span>
+                </button>
                 <button id="lockTerminalBtn" class="lock-btn" type="button" title="Lock Victor Session">
                     <span class="lock-icon">🔒</span>
                     <span class="lock-label">LOCK TERMINAL</span>
@@ -1398,6 +1489,28 @@ body::before {
                         </div>
                     </div>
 
+                    <!-- Command Text Input Container -->
+                    <div class="command-input-container">
+                        <form id="commandForm" class="command-form" autocomplete="off">
+                            <div class="command-input-wrapper">
+                                <span class="command-input-prefix">&gt;</span>
+                                <input 
+                                    type="text" 
+                                    id="commandTextInput" 
+                                    class="command-text-input" 
+                                    placeholder="Type a command, URL, meeting code, or event details..." 
+                                    aria-label="Type a command or details"
+                                />
+                                <button type="submit" id="sendCommandBtn" class="command-send-btn" title="Send Command (Enter)">
+                                    <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                    </svg>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
                     <div class="transcript-bottom-bar">
                         <div class="stream-status">
                             <span class="mic-status-dot"></span>
@@ -1525,6 +1638,92 @@ body::before {
                 <!-- Status Feedback -->
                 <div id="pinStatusText" class="pin-status-text" role="status" aria-live="polite"></div>
             </section>
+        </div>
+    </div>
+
+    <!-- Incoming Call Floating Banner -->
+    <div id="incomingCallBanner" class="incoming-call-banner hidden" role="dialog" aria-label="Incoming Phone Call">
+        <div class="incoming-call-glow"></div>
+        <div class="incoming-call-content">
+            <div class="call-avatar-pulse">
+                <span class="call-icon">📞</span>
+            </div>
+            <div class="call-info">
+                <div class="call-type-badge" id="callTypeBadge">INCOMING PHONE CALL</div>
+                <div class="call-name" id="callerNameDisplay">Caller Name</div>
+                <div class="call-number" id="callerNumberDisplay">Number</div>
+            </div>
+            <div class="call-actions">
+                <button id="btnAnswerCall" class="call-btn btn-answer" type="button">
+                    <span class="btn-icon">✓</span>
+                    <span>PICK UP</span>
+                </button>
+                <button id="btnRejectCall" class="call-btn btn-reject" type="button">
+                    <span class="btn-icon">✕</span>
+                    <span>REJECT</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phone Companion Pairing Modal -->
+    <div id="phonePairingModal" class="phone-modal-overlay hidden" role="dialog" aria-label="Phone Companion Pairing">
+        <div class="phone-modal-card">
+            <div class="phone-modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-diamond"></span>
+                    <span class="modal-title">VICTOR // PHONE COMPANION V1</span>
+                </div>
+                <button id="btnClosePhoneModal" class="modal-close-btn" type="button">✕</button>
+            </div>
+
+            <div class="phone-modal-body">
+                <!-- Status Row -->
+                <div class="phone-telemetry-box">
+                    <div class="telemetry-row">
+                        <span class="telemetry-label">COMPANION STATUS:</span>
+                        <span class="telemetry-val" id="modalPhoneStatus">DISCONNECTED</span>
+                    </div>
+                    <div class="telemetry-row">
+                        <span class="telemetry-label">PAIRED DEVICE:</span>
+                        <span class="telemetry-val" id="modalPhoneDevice">None</span>
+                    </div>
+                    <div class="telemetry-row">
+                        <span class="telemetry-label">BATTERY:</span>
+                        <span class="telemetry-val" id="modalPhoneBattery">--</span>
+                    </div>
+                </div>
+
+                <!-- Pairing Setup Box -->
+                <div class="pairing-setup-box" id="pairingSetupBox">
+                    <div class="setup-heading">PAIRING PROTOCOL</div>
+                    <p class="setup-desc">
+                        Open the <strong>Victor Companion App</strong> on your Android phone and connect over local Wi-Fi.
+                    </p>
+
+                    <div class="pairing-details-grid">
+                        <div class="detail-item">
+                            <span class="detail-key">SERVER IP & PORT</span>
+                            <span class="detail-val" id="pairingServerAddress">Connecting...</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-key">PAIRING 6-DIGIT PIN</span>
+                            <span class="detail-val pin-highlight" id="pairingPinDisplay">------</span>
+                        </div>
+                    </div>
+
+                    <button id="btnGeneratePairingCode" class="btn-primary-action" type="button">
+                        <span>GENERATE PAIRING PIN</span>
+                    </button>
+                </div>
+
+                <!-- Unpair Danger Zone -->
+                <div class="unpair-box" id="unpairBox">
+                    <button id="btnUnpairPhone" class="btn-danger-action" type="button">
+                        <span>REVOKE & UNPAIR PHONE</span>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 

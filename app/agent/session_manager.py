@@ -55,14 +55,16 @@ class VictorSessionManager:
         self.state = VictorState.LOCKED
         self.websocket_send_callback = websocket_send_callback
         self.live_session = LiveSessionManager(self)
-        self.biometric_verifier = biometric_verifier or WindowsHelloVerifier()
-        self._is_verifying_biometric = False
 
         # Load config for auth settings
         self._config = load_config()
         self._secret_store = SecretStore(self._config.security.secrets_path)
         self._secret_store.ensure_configured()
         self._auth_manager = AuthManager(self._config.security, self._secret_store)
+
+        timeout_sec = getattr(self._config.security, "biometric_timeout_seconds", 60.0)
+        self.biometric_verifier = biometric_verifier or WindowsHelloVerifier(timeout_seconds=timeout_sec)
+        self._is_verifying_biometric = False
 
         # Memory & Context Manager
         from app.memory.manager import MemoryManager
@@ -130,11 +132,20 @@ class VictorSessionManager:
             # Enforce PIN_VERIFIED != AUTHENTICATED: Hold in BIOMETRIC_PENDING
             await self.set_state(VictorState.BIOMETRIC_PENDING)
             log_event(logger, logging.INFO, "auth_pin_success_biometric_pending")
+            # Pre-warm biometric availability check in background so first command doesn't incur latency
+            asyncio.create_task(self._prewarm_biometric_check())
             return True, "PIN verified, Sir. Biometric authentication required."
         else:
             await self.set_state(VictorState.LOCKED)
             log_event(logger, logging.WARNING, "auth_pin_failed")
             return False, auth_result.message
+
+    async def _prewarm_biometric_check(self) -> None:
+        """Pre-warm biometric availability check in background."""
+        try:
+            await self.biometric_verifier.check_availability()
+        except Exception as e:
+            logger.debug(f"Pre-warming biometric availability check failed: {e}")
 
     @staticmethod
     def _calculate_pcm_rms(pcm_chunk: bytes) -> float:
@@ -207,6 +218,14 @@ class VictorSessionManager:
             await self._handle_auth_failure(f"Fingerprint hardware unavailable ({availability.value}).")
             return False
 
+        # Inform UI that sensor is ready and listening with timeout window
+        timeout_display = int(getattr(self.biometric_verifier, "timeout_seconds", 60))
+        await self.websocket_send_callback({
+            "type": "transcript",
+            "role": "assistant",
+            "text": f"Fingerprint sensor active. Please scan your fingerprint now (timeout: {timeout_display}s).",
+        })
+
         # 2. Invoke native Windows Hello
         result = await self.biometric_verifier.request_verification(
             "Please verify your fingerprint to authenticate as Anubhav Sir."
@@ -257,6 +276,9 @@ class VictorSessionManager:
                 self.watchdog_task = asyncio.create_task(self._inactivity_watchdog())
                 self._is_verifying_biometric = False
                 log_event(logger, logging.INFO, "biometric_auth_complete_session_active")
+                if self._pending_first_command:
+                    logger.info(f"Executing pending first command after authentication: '{self._pending_first_command}'")
+                    await self.live_session.send_text(self._pending_first_command)
                 return True
             else:
                 await self.set_state(VictorState.ERROR)
@@ -300,16 +322,47 @@ class VictorSessionManager:
 
     async def handle_command(self, command_text: str) -> bool:
         """Handle incoming text or voice command from user."""
+        command_text = (command_text or "").strip()
+        if not command_text:
+            return False
+
         if self.state == VictorState.BIOMETRIC_PENDING:
             await self.trigger_biometric_verification(command_text=command_text)
             return False
 
         if not self.is_authenticated():
             logger.warning("Command attempted while session is not authenticated.")
+            await self.websocket_send_callback({
+                "type": "transcript",
+                "role": "assistant",
+                "text": "Please complete PIN and fingerprint verification first, Sir.",
+            })
             return False
 
         self.last_activity_time = time.time()
         self._auth_manager.touch_activity()
+
+        # Echo user command to transcript in UI
+        await self.websocket_send_callback({
+            "type": "transcript",
+            "role": "user",
+            "text": command_text,
+        })
+
+        # Submit text turn to Gemini Live
+        if self.live_session.is_connected:
+            await self.live_session.send_text(command_text)
+        else:
+            logger.info("Live session not active; attempting connection for text command...")
+            connected = await self.live_session.start()
+            if connected:
+                await self.live_session.send_text(command_text)
+            else:
+                await self.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": "Gemini Live session is currently unavailable. Please try again in a moment, Sir.",
+                })
         return True
 
     async def lock(self):

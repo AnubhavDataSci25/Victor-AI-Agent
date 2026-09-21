@@ -70,6 +70,34 @@ class LiveSessionManager:
                         "use the memory_recall tool. Never store passwords, PINs, or API keys. "
                         "CRITICAL: Current user instructions always override any recalled background memories or preferences."
                         f"{profile_note} "
+                        "For fresh real-time current affairs and updates, use the current_affairs_get_updates tool. "
+                        "If the user asks for news without specifying a category, ask: 'Sure, Sir. Which category would you like—National, International, Tech, Sports, Stock Market, Finance, Education, or all categories?'. "
+                        "Politics is strictly excluded from updates; if asked for politics, politely decline and offer the valid categories. "
+                        "When the user asks to open a story (e.g. 'Open the second story', 'Open the sports one', 'Open this news in browser'), use the current_affairs_open_story tool. "
+                        "NEVER store retrieved news articles, headlines, URLs, or current affairs into long-term memory or memory_remember. "
+                        "For system telemetry and quick controls, use the native system tools: "
+                        "system_get_battery for battery percentage and charging state; "
+                        "system_get_network for Wi-Fi SSID, signal strength, and internet connectivity; "
+                        "system_get_bluetooth for Bluetooth hardware and service status; "
+                        "system_get_brightness and system_adjust_brightness for display brightness reading and adjustments; "
+                        "system_get_volume and system_adjust_volume for master audio volume and mute; "
+                        "system_get_performance for real-time CPU and RAM utilization; "
+                        "system_get_notifications or system_open_notification_panel to access notifications on screen; "
+                        "system_open_settings to open Windows Settings pages (e.g. 'bluetooth', 'wifi', 'sound', 'display', 'power', 'notifications', 'settings'). "
+                        "For Google Services automation, use the dedicated Google tools: "
+                        "google_keep_create_note to create notes (with title and content), google_keep_search_notes to find notes, and google_keep_open to view Keep; "
+                        "google_calendar_create_event to schedule calendar events/tasks (always ensure explicit date and start time; if the user's date or time is ambiguous, ask for clarification before calling the tool), and google_calendar_open to view the calendar; "
+                        "google_meet_create to launch an instant Google Meet meeting (always report the generated meeting URL and code to the user), and google_meet_join to join a meeting using a meeting code or URL provided via voice or UI text input. "
+                        "For Android phone automation, use the dedicated phone companion tools: "
+                        "Use phone_get_status to check phone connection status and battery. "
+                        "When the user asks to call someone (e.g., 'Victor, call Rahul' or 'Call Dad'), ALWAYS call phone_resolve_contact first. "
+                        "If multiple contacts or phone numbers match, list them and ask the user to choose. "
+                        "When a single contact/number is identified, you MUST explicitly ask the user for confirmation: 'Sir, I found <name> at <number>. Do you want me to call this number?'. "
+                        "NEVER call phone_initiate_call without prior explicit affirmative user confirmation ('yes', 'call', 'proceed'). "
+                        "When the user confirms, call phone_initiate_call with the confirmed contact name and number. "
+                        "When an incoming call is announced ('Sir, ABC is calling'), call phone_answer_call if the user commands to pick up, or phone_reject_call if the user commands to reject or decline. "
+                        "To open YouTube or search for videos on the phone, use phone_launch_youtube. "
+                        "To unpair or revoke the phone, use phone_unpair. "
                         "The user can terminate the session by asking: 'lock yourself'."
                     )
                 )]
@@ -227,6 +255,26 @@ class LiveSessionManager:
                 logger.error(f"Error sending audio chunk to Gemini Live: {e}")
         else:
             logger.debug("send_audio dropped chunk: session is not connected.")
+
+    async def send_text(self, text: str):
+        """Sends user text turn to Gemini Live session."""
+        if self.is_connected and self.session:
+            try:
+                # Update visual state to THINKING
+                await self.session_manager.websocket_send_callback({
+                    "type": "orb_state",
+                    "state": "THINKING",
+                })
+                # Submit text turn to Gemini Live
+                if hasattr(self.session, "send"):
+                    await self.session.send(input=text, end_of_turn=True)
+                elif hasattr(self.session, "send_realtime_input"):
+                    await self.session.send_realtime_input(text=text)
+                logger.info(f"Dispatched text command to Gemini Live: '{text}'")
+            except Exception as e:
+                logger.error(f"Error sending text to Gemini Live: {e}")
+        else:
+            logger.warning(f"send_text dropped message (session not connected): '{text}'")
 
     async def close(self):
         self.is_connected = False

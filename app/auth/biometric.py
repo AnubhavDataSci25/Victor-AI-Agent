@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Optional
 
 from app.logging import get_logger, log_event
 
@@ -62,13 +64,20 @@ class WindowsHelloVerifier(BaseBiometricVerifier):
     Invokes the native WinRT API via a PowerShell runtime bridge.
     """
 
-    def __init__(self, timeout_seconds: float = 30.0) -> None:
+    def __init__(self, timeout_seconds: float = 60.0) -> None:
         self.timeout_seconds = timeout_seconds
+        self._cached_availability: Optional[BiometricAvailability] = None
+        self._availability_checked_at: float = 0.0
 
-    async def check_availability(self) -> BiometricAvailability:
+    async def check_availability(self, force_refresh: bool = False) -> BiometricAvailability:
         """
         Queries UserConsentVerifier.CheckAvailabilityAsync() for biometric availability.
+        Caches availability for 10 minutes to eliminate repetitive PowerShell startup latency.
         """
+        if not force_refresh and self._cached_availability is not None:
+            if time.time() - self._availability_checked_at < 600:
+                return self._cached_availability
+
         ps_cmd = (
             "Add-Type -AssemblyName System.Runtime.WindowsRuntime; "
             "$asTaskGeneric = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { "
@@ -98,6 +107,8 @@ class WindowsHelloVerifier(BaseBiometricVerifier):
                     status_str = line.split(":", 1)[1].strip()
                     try:
                         status = BiometricAvailability(status_str)
+                        self._cached_availability = status
+                        self._availability_checked_at = time.time()
                         log_event(logger, logging.INFO, "biometric_availability_checked", status=status.value)
                         return status
                     except ValueError:
@@ -128,21 +139,31 @@ class WindowsHelloVerifier(BaseBiometricVerifier):
             "  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 2 -and $_.IsGenericMethod -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' -and $_.GetParameters()[1].ParameterType.Name -eq 'CancellationToken' "
             "}; "
             f"$cts = New-Object System.Threading.CancellationTokenSource; "
-            f"$cts.CancelAfter({timeout_ms}); "
             f"$op = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::RequestVerificationAsync('{escaped_prompt}'); "
             "$task = $asTaskGeneric.MakeGenericMethod([Windows.Security.Credentials.UI.UserConsentVerificationResult,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]).Invoke($null, @($op, $cts.Token)); "
             "try { "
-            "  $task.Wait($cts.Token); "
-            "  Write-Output ('RESULT:' + $task.Result.ToString()); "
+            f"  $completed = $task.Wait({timeout_ms}); "
+            "  if (-not $completed) { "
+            "    $cts.Cancel(); "
+            "    Write-Output 'RESULT:Timeout'; "
+            "  } else { "
+            "    Write-Output ('RESULT:' + $task.Result.ToString()); "
+            "  } "
             "} catch [System.OperationCanceledException] { "
             "  Write-Output 'RESULT:Timeout'; "
+            "} catch [System.AggregateException] { "
+            "  if ($_.Exception.InnerException -is [System.OperationCanceledException] -or $_.Exception.InnerException -is [System.Threading.Tasks.TaskCanceledException]) { "
+            "    Write-Output 'RESULT:Timeout'; "
+            "  } else { "
+            "    Write-Output 'RESULT:Error'; "
+            "  } "
             "} catch { "
             "  Write-Output 'RESULT:Error'; "
             "}"
         )
 
         try:
-            log_event(logger, logging.INFO, "biometric_verification_requested")
+            log_event(logger, logging.INFO, "biometric_verification_requested", timeout_seconds=self.timeout_seconds)
             proc = await asyncio.create_subprocess_exec(
                 "powershell.exe",
                 "-NoProfile",
@@ -151,7 +172,7 @@ class WindowsHelloVerifier(BaseBiometricVerifier):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_seconds + 5.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_seconds + 10.0)
             raw = stdout.decode("utf-8", errors="ignore")
 
             for line in raw.splitlines():

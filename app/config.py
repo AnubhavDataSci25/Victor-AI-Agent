@@ -43,6 +43,7 @@ class SecurityConfig(BaseModel):
     lockout_seconds: int = 600
     session_timeout_minutes: int = 15
     secrets_path: str = str(_PROJECT_ROOT / "config" / "secrets.yaml")
+    biometric_timeout_seconds: float = 60.0
 
 
 class FilesystemConfig(BaseModel):
@@ -109,7 +110,7 @@ class MultiAgentConfig(BaseModel):
 
 class VictorConfig(BaseModel):
     """Top-level configuration for Victor 2.0."""
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8000
     gemini_model: str = "gemini-3.8-live"
 
@@ -143,6 +144,13 @@ def load_config() -> VictorConfig:
         security_cfg = yaml_data.get("security", {})
         security_cfg["auth_mode"] = os.getenv("VICTOR_AUTH_MODE")
         yaml_data["security"] = security_cfg
+    if os.getenv("BIOMETRIC_TIMEOUT_SECONDS"):
+        security_cfg = yaml_data.get("security", {})
+        try:
+            security_cfg["biometric_timeout_seconds"] = float(os.getenv("BIOMETRIC_TIMEOUT_SECONDS"))
+            yaml_data["security"] = security_cfg
+        except ValueError:
+            pass
     if os.getenv("VICTOR_MEMORY_DB"):
         memory_cfg = yaml_data.get("memory", {})
         memory_cfg["db_path"] = os.getenv("VICTOR_MEMORY_DB")

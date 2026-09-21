@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.VictorCompanion" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent_cyan</item>
+        <item name="colorSecondary">@color/accent_emerald</item>
+        <item name="android:statusBarColor">@color/bg_primary</item>
+        <item name="android:windowBackground">@color/bg_primary</item>
+    </style>
+</resources>
