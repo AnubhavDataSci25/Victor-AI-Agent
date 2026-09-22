@@ -160,6 +160,7 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     try:
         from app.tools.web_apps.tool import (
             WebAppOpenChatGPTTool,
+            WebAppOpenClaudeTool,
             WebAppOpenGeminiTool,
             WebAppWikipediaTool,
             WebAppYouTubeTool,
@@ -168,6 +169,7 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         registry.register(WebAppWikipediaTool())
         registry.register(WebAppOpenChatGPTTool())
         registry.register(WebAppOpenGeminiTool())
+        registry.register(WebAppOpenClaudeTool())
         logger.info("Registered web app tools.")
     except Exception as e:
         logger.warning(f"Web app tools unavailable: {e}")
@@ -294,6 +296,28 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         logger.info("Registered phone companion automation tools.")
     except Exception as e:
         logger.warning(f"Phone tools unavailable: {e}")
+
+    # --- Free Public API Tools ---
+    try:
+        from app.tools.api_tools.tool import (
+            ApiCryptoPriceTool,
+            ApiForexRateTool,
+            ApiNewsHeadlinesTool,
+            ApiPublicHolidaysTool,
+            ApiPublicIpInfoTool,
+            ApiStockPriceTool,
+            ApiWeatherTool,
+        )
+        registry.register(ApiWeatherTool())
+        registry.register(ApiStockPriceTool())
+        registry.register(ApiForexRateTool())
+        registry.register(ApiCryptoPriceTool())
+        registry.register(ApiNewsHeadlinesTool())
+        registry.register(ApiPublicIpInfoTool())
+        registry.register(ApiPublicHolidaysTool())
+        logger.info("Registered Free Public API tools.")
+    except Exception as e:
+        logger.warning(f"Public API tools unavailable: {e}")
 
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")

@@ -46,13 +46,17 @@ class BrowserOpenUrlTool(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "The full URL to open (e.g., https://en.wikipedia.org)."}
+            "url": {"type": "string", "description": "The full URL or web address to open (e.g., https://claude.ai, https://en.wikipedia.org, or domain name)."}
         },
         "required": ["url"]
     }
 
     async def execute(self, args: dict) -> str:
-        url = args.get("url")
+        url = (args.get("url") or "").strip()
+        if not url:
+            return "Error: URL is required."
+        if not url.startswith(("http://", "https://", "about:")):
+            url = f"https://{url}"
         driver = PlaywrightBrowserDriver()
         try:
             page = await driver.get_page()

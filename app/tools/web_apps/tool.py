@@ -49,3 +49,11 @@ class WebAppOpenGeminiTool(BaseTool):
 
     async def execute(self, args: dict) -> str:
         return await AIWebProvider.open_gemini()
+
+class WebAppOpenClaudeTool(BaseTool):
+    name = "webapp_open_claude"
+    description = "Opens the Claude AI website (https://claude.ai) in the browser."
+    parameters = {"type": "object", "properties": {}}
+
+    async def execute(self, args: dict) -> str:
+        return await AIWebProvider.open_claude()

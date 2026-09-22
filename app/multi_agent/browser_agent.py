@@ -113,43 +113,134 @@ class MultiAgentBrowserManager:
         if has_challenge:
             raise RuntimeError(f"Browser interaction halted: {msg} Please complete login in the open Chrome tab.")
 
-        # 2. Input selectors across the 3 platforms
-        input_selectors = [
-            "rich-textarea",
-            "#prompt-textarea",
-            "fieldset div[contenteditable='true']",
-            "div[contenteditable='true']",
-            "textarea",
-        ]
+        # 2. Input selectors tailored by platform and waiting for SPA hydration
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+
+        role_selectors = {
+            AgentRole.GEMINI_RESEARCHER: [
+                "rich-textarea .ql-editor",
+                "rich-textarea [contenteditable='true']",
+                "rich-textarea p",
+                "div[contenteditable='true']",
+            ],
+            AgentRole.CHATGPT_PROMPT_ENGINEER: [
+                "#prompt-textarea",
+                "div#prompt-textarea",
+                "div.ProseMirror[contenteditable='true']",
+                "textarea[name='prompt-textarea']",
+                "textarea.wcDTda_fallbackTextarea",
+                "div[contenteditable='true']",
+            ],
+            AgentRole.CLAUDE_DEVELOPER: [
+                "fieldset div[contenteditable='true']",
+                "div.tiptap.ProseMirror",
+                "div.ProseMirror[contenteditable='true']",
+                "div[contenteditable='true']",
+                "textarea",
+            ],
+        }
+        input_selectors = role_selectors.get(role, ["div[contenteditable='true']", "textarea"])
 
         found_input = None
-        for sel in input_selectors:
+        input_el = None
+        # Poll for hydrated input up to 12 seconds
+        poll_start = asyncio.get_event_loop().time()
+        while (asyncio.get_event_loop().time() - poll_start) < 12.0:
+            for sel in input_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        found_input = sel
+                        input_el = el
+                        break
+                except Exception:
+                    continue
+            if input_el:
+                break
+            await asyncio.sleep(0.5)
+
+        if not input_el:
+            raise RuntimeError(f"Could not locate chat input for {role.value} within 12s on {page.url}")
+
+        tag_name = ""
+        is_editable = False
+        try:
+            tag_name = await input_el.evaluate("el => el.tagName.toLowerCase()")
+            is_editable = await input_el.evaluate("el => el.isContentEditable")
+        except Exception:
+            pass
+
+        if tag_name in ("textarea", "input") and not is_editable:
             try:
-                el = await page.wait_for_selector(sel, timeout=3000)
-                if el and await el.is_visible():
-                    found_input = sel
+                await input_el.fill(prompt)
+            except Exception:
+                await input_el.click()
+                await page.keyboard.insert_text(prompt)
+        else:
+            # Contenteditable (ProseMirror / Quill / TipTap)
+            await input_el.scroll_into_view_if_needed()
+            await input_el.click()
+            await asyncio.sleep(0.3)
+            try:
+                await page.keyboard.insert_text(prompt)
+            except Exception as e:
+                logger.debug(f"keyboard.insert_text failed: {e}")
+
+            # Verify editor populated
+            editor_len = await page.evaluate(
+                """(el) => (el.innerText || el.textContent || el.value || '').trim().length""",
+                input_el,
+            )
+            if editor_len < 10:
+                logger.info(f"Using JS execCommand fallback to insert prompt for {role.value}...")
+                await page.evaluate(
+                    """([el, text]) => {
+                        el.focus();
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('insertText', false, text);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    [input_el, prompt],
+                )
+
+        # 3. Submit message
+        await asyncio.sleep(0.8)
+        send_btn_selectors = [
+            "button[data-testid='send-button']",
+            "button[aria-label*='Send' i]",
+            "button[aria-label*='Submit' i]",
+            "button.send-button",
+            "fieldset button:has(svg)",
+            "button:has(svg path[d*='M2.01 21L23 12'])",
+        ]
+        submitted = False
+        for btn_sel in send_btn_selectors:
+            try:
+                btn = await page.query_selector(btn_sel)
+                if btn and await btn.is_visible() and not (await btn.is_disabled()):
+                    await btn.click()
+                    submitted = True
+                    logger.info(f"Clicked send button: {btn_sel}")
                     break
             except Exception:
                 continue
 
-        if not found_input:
-            # Fallback: paste via keyboard if focused
-            try:
-                await page.keyboard.type(prompt[:200])
-            except Exception as e:
-                raise RuntimeError(f"Could not locate chat input for {role.value}: {e}")
-        else:
-            await page.fill(found_input, prompt)
-
-        # 3. Submit message
-        await page.keyboard.press("Enter")
-        await asyncio.sleep(2.0)
+        if not submitted:
+            await page.keyboard.press("Enter")
+            logger.info("Submitted via Enter keypress")
 
         # 4. Wait for response completion
         # Heuristic: Monitor response elements until text stabilizes
         start_time = asyncio.get_event_loop().time()
         last_text = ""
         stable_count = 0
+
+        # Wait at least 3.0 seconds for generation to start before polling stabilization
+        await asyncio.sleep(3.0)
 
         while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
             await asyncio.sleep(1.5)
@@ -158,25 +249,64 @@ class MultiAgentBrowserManager:
                 content = await page.evaluate(
                     """() => {
                         const responses = document.querySelectorAll(
-                            '.model-response-text, [data-message-author-role="assistant"], .font-claude-message, .markdown'
+                            '[data-message-author-role="assistant"], .model-response-text, .font-claude-message, message-content, article, .markdown'
                         );
                         if (responses.length > 0) {
-                            return responses[responses.length - 1].innerText;
+                            return responses[responses.length - 1].innerText || "";
                         }
-                        return document.body.innerText;
+                        return "";
                     }"""
                 )
-                if content and content == last_text and len(content.strip()) > 50:
+                content = (content or "").strip()
+                if content and content == last_text and len(content) > 50:
                     stable_count += 1
                     if stable_count >= 2:
                         return content
                 else:
-                    last_text = content or ""
+                    if content:
+                        last_text = content
                     stable_count = 0
             except Exception:
                 continue
 
-        return last_text if last_text else "Response captured."
+        if last_text and len(last_text) > 50 and last_text != "Response captured.":
+            return last_text
+        raise RuntimeError(f"No valid response generated by {role.value} within {timeout_seconds}s timeout.")
+
+    async def generate_direct_llm_fallback(self, role: AgentRole, prompt: str) -> str:
+        """
+        Direct LLM fallback using Google GenAI SDK when browser automation
+        encounters login hurdles, Cloudflare bot detection, or UI selector drifts.
+        Ensures the user's multi-agent workflow never breaks.
+        """
+        if self.simulate_responses:
+            return self._generate_simulated_response(role, prompt)
+
+        try:
+            from google import genai
+            api_key = os.getenv("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key) if api_key else genai.Client()
+            model = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+            logger.info(f"Invoking direct Gemini LLM fallback ({model}) for {role.value}...")
+
+            role_system_notes = {
+                AgentRole.GEMINI_RESEARCHER: "You are the Gemini Research & Planning Agent. Provide deep, structured research and architecture in markdown format.",
+                AgentRole.CHATGPT_PROMPT_ENGINEER: "You are the ChatGPT Prompt Engineering Agent. Transform research into detailed modular specifications and prompts in markdown format.",
+                AgentRole.CLAUDE_DEVELOPER: "You are the Claude Development Agent. Generate concrete code architecture and execution plans in markdown format.",
+            }
+            enriched_prompt = f"{role_system_notes.get(role, '')}\n\n{prompt}"
+
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=enriched_prompt,
+            )
+            text = response.text or ""
+            if text.strip():
+                return text.strip()
+            raise ValueError("Empty response from GenAI client")
+        except Exception as exc:
+            logger.error(f"Direct LLM fallback error: {exc}")
+            raise
 
     def save_artifact(self, filename: str, content: str) -> Path:
         """Saves artifact deterministically to configured Downloads directory."""

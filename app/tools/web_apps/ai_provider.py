@@ -25,3 +25,14 @@ class AIWebProvider:
         except Exception as e:
             logger.error(f"Gemini open error: {e}")
             return f"Could not open Gemini. Error: {str(e)}"
+
+    @staticmethod
+    async def open_claude() -> str:
+        driver = PlaywrightBrowserDriver()
+        try:
+            page = await driver.get_page()
+            await page.goto("https://claude.ai", wait_until="domcontentloaded")
+            return "Successfully opened Claude AI in the browser."
+        except Exception as e:
+            logger.error(f"Claude open error: {e}")
+            return f"Could not open Claude AI. Error: {str(e)}"

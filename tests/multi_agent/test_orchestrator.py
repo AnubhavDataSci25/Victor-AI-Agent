@@ -157,3 +157,23 @@ async def test_orchestrator_status_and_downloads(
     dl_spec = mock_orchestrator.download_artifact("specification")
     # Not yet saved to artifacts list, but current_output exists -> saves current
     assert dl_spec["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_self_healing_from_response_captured(mock_orchestrator: MultiAgentOrchestrator):
+    await mock_orchestrator.start_project(idea="Real-time stock dashboard", project_name="StockDash")
+    # Simulate a corrupted current_output (the bug the user experienced)
+    mock_orchestrator.state.current_output = "Response captured."
+
+    # When approving Gemini, orchestrator must self-heal and replace "Response captured." with valid content
+    res = await mock_orchestrator.review_artifact(action=ReviewAction.APPROVE)
+    assert res["status"] == "review_required"
+    assert "Response captured." not in mock_orchestrator.state.current_output
+    assert len(mock_orchestrator.state.current_output) > 50
+
+    # Simulate corrupted specification before Claude handoff
+    mock_orchestrator.state.current_output = "Response captured."
+    res_claude = await mock_orchestrator.review_artifact(action=ReviewAction.APPROVE)
+    assert res_claude["status"] == "development_started"
+    assert "Response captured." not in mock_orchestrator.state.current_output
+    assert len(mock_orchestrator.state.current_output) > 50

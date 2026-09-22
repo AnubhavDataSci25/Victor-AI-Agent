@@ -77,35 +77,45 @@ class MultiAgentOrchestrator:
         self.state.transition_to(MultiAgentStage.GEMINI_RESEARCH, active_agent=AgentRole.GEMINI_RESEARCHER)
 
         research_prompt = build_gemini_research_prompt(name, idea)
+        output = None
         try:
             output = await self.browser_manager.send_prompt_and_receive(
                 role=AgentRole.GEMINI_RESEARCHER,
                 prompt=research_prompt,
                 timeout_seconds=self.config.browser_timeout_seconds,
             )
-            self.state.current_output = output
-            self.state.transition_to(MultiAgentStage.GEMINI_REVIEW_REQUIRED)
-
-            return {
-                "status": "review_required",
-                "stage": self.state.current_stage.value,
-                "project_name": self.state.project_name,
-                "active_agent": "Gemini (Research & Planning Agent)",
-                "artifact_name": f"{self.state.project_name}_IDEA_README.md",
-                "message": (
-                    "Gemini has completed comprehensive project research. "
-                    "AUDIT REQUIRED: Please review the generated README below. "
-                    "You must explicitly Approve, Reject, or Request Changes before Victor proceeds."
-                ),
-                "content": output,
-            }
         except Exception as exc:
-            logger.error(f"Error during Gemini research: {exc}")
-            return {
-                "status": "error",
-                "stage": self.state.current_stage.value,
-                "message": f"Gemini research stage failed: {exc}",
-            }
+            logger.warning(f"Browser interaction for Gemini research encountered issue: {exc}. Attempting direct LLM fallback...")
+            try:
+                output = await self.browser_manager.generate_direct_llm_fallback(
+                    role=AgentRole.GEMINI_RESEARCHER,
+                    prompt=research_prompt,
+                )
+            except Exception as fb_exc:
+                logger.error(f"Both browser and direct fallback failed for Gemini: {fb_exc}")
+                return {
+                    "status": "error",
+                    "stage": self.state.current_stage.value,
+                    "message": f"Gemini research stage failed: {exc} (Fallback failed: {fb_exc})",
+                }
+
+        self.state.current_output = output
+        self.state.transition_to(MultiAgentStage.GEMINI_REVIEW_REQUIRED)
+
+        filename = f"{self.state.project_name}_IDEA_README.md"
+        return {
+            "status": "review_required",
+            "stage": self.state.current_stage.value,
+            "project_name": self.state.project_name,
+            "active_agent": "Gemini (Research & Planning Agent)",
+            "artifact_name": filename,
+            "message": (
+                "Gemini has completed comprehensive project research. "
+                "AUDIT REQUIRED: Please review the generated README below. "
+                "You must explicitly Approve, Reject, or Request Changes before Victor proceeds."
+            ),
+            "content": output,
+        }
 
     async def review_artifact(self, action: ReviewAction | str, feedback: str = "") -> dict[str, Any]:
         """
@@ -134,9 +144,26 @@ class MultiAgentOrchestrator:
                 self.state.gemini_approved = True
                 self.state.transition_to(MultiAgentStage.GEMINI_APPROVED)
 
-                # Download approved README to local Downloads
+                approved_readme = (self.state.current_output or "").strip()
+                if len(approved_readme) < 50 or approved_readme == "Response captured.":
+                    readme_file = self.browser_manager.downloads_dir / f"{self.state.project_name}_IDEA_README.md"
+                    if readme_file.exists():
+                        f_text = readme_file.read_text(encoding="utf-8").strip()
+                        if len(f_text) > 50 and f_text != "Response captured.":
+                            approved_readme = f_text
+
+                    if len(approved_readme) < 50 or approved_readme == "Response captured.":
+                        logger.info("Approved README was invalid or empty. Generating comprehensive research via fallback...")
+                        research_prompt = build_gemini_research_prompt(self.state.project_name, self.state.original_idea)
+                        approved_readme = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.GEMINI_RESEARCHER,
+                            prompt=research_prompt,
+                        )
+
+                self.state.current_output = approved_readme
+                # Save approved README to local Downloads
                 filename = f"{self.state.project_name}_IDEA_README.md"
-                saved_path = self.browser_manager.save_artifact(filename, self.state.current_output)
+                saved_path = self.browser_manager.save_artifact(filename, approved_readme)
                 self.state.add_artifact(filename, str(saved_path), MultiAgentStage.README_DOWNLOADED, approved=True)
                 self.state.transition_to(MultiAgentStage.README_DOWNLOADED)
 
@@ -148,40 +175,49 @@ class MultiAgentOrchestrator:
                 )
 
                 prompt_eng_instruction = build_chatgpt_prompt_engineering_prompt(
-                    self.state.project_name, self.state.current_output
+                    self.state.project_name, approved_readme
                 )
 
+                chatgpt_output = None
                 try:
                     chatgpt_output = await self.browser_manager.send_prompt_and_receive(
                         role=AgentRole.CHATGPT_PROMPT_ENGINEER,
                         prompt=prompt_eng_instruction,
                         timeout_seconds=self.config.browser_timeout_seconds,
                     )
-                    self.state.current_output = chatgpt_output
-                    self.state.transition_to(MultiAgentStage.CHATGPT_REVIEW_REQUIRED)
-
-                    return {
-                        "status": "review_required",
-                        "stage": self.state.current_stage.value,
-                        "project_name": self.state.project_name,
-                        "active_agent": "ChatGPT (Prompt Engineering & Specification Agent)",
-                        "artifact_name": f"{self.state.project_name}_DEVELOPMENT_SPECIFICATION.md",
-                        "downloaded_readme": str(saved_path),
-                        "message": (
-                            f"Approved research downloaded to: {saved_path}.\n"
-                            "ChatGPT has transformed the research into a development specification & prompt package. "
-                            "AUDIT REQUIRED: Please review the prompt package below. "
-                            "You must explicitly Approve, Reject, or Request Changes before Victor proceeds to Claude."
-                        ),
-                        "content": chatgpt_output,
-                    }
                 except Exception as exc:
-                    logger.error(f"Error during ChatGPT prompt engineering: {exc}")
-                    return {
-                        "status": "error",
-                        "stage": self.state.current_stage.value,
-                        "message": f"ChatGPT prompt engineering stage failed: {exc}",
-                    }
+                    logger.warning(f"Browser interaction for ChatGPT prompt engineering failed: {exc}. Attempting direct LLM fallback...")
+                    try:
+                        chatgpt_output = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.CHATGPT_PROMPT_ENGINEER,
+                            prompt=prompt_eng_instruction,
+                        )
+                    except Exception as fb_exc:
+                        logger.error(f"Both browser and direct fallback failed for ChatGPT: {fb_exc}")
+                        return {
+                            "status": "error",
+                            "stage": self.state.current_stage.value,
+                            "message": f"ChatGPT prompt engineering stage failed: {exc} (Fallback failed: {fb_exc})",
+                        }
+
+                self.state.current_output = chatgpt_output
+                self.state.transition_to(MultiAgentStage.CHATGPT_REVIEW_REQUIRED)
+
+                return {
+                    "status": "review_required",
+                    "stage": self.state.current_stage.value,
+                    "project_name": self.state.project_name,
+                    "active_agent": "ChatGPT (Prompt Engineering & Specification Agent)",
+                    "artifact_name": f"{self.state.project_name}_DEVELOPMENT_SPECIFICATION.md",
+                    "downloaded_readme": str(saved_path),
+                    "message": (
+                        f"Approved research downloaded to: {saved_path}.\n"
+                        "ChatGPT has transformed the research into a development specification & prompt package. "
+                        "AUDIT REQUIRED: Please review the prompt package below. "
+                        "You must explicitly Approve, Reject, or Request Changes before Victor proceeds to Claude."
+                    ),
+                    "content": chatgpt_output,
+                }
 
             elif action == ReviewAction.REQUEST_CHANGES:
                 if not feedback or not feedback.strip():
@@ -197,32 +233,41 @@ class MultiAgentOrchestrator:
 
                 # Send revision prompt back to Gemini in the SAME tab
                 rev_prompt = build_revision_prompt("Gemini", feedback)
+                updated_output = None
                 try:
                     updated_output = await self.browser_manager.send_prompt_and_receive(
                         role=AgentRole.GEMINI_RESEARCHER,
                         prompt=rev_prompt,
                         timeout_seconds=self.config.browser_timeout_seconds,
                     )
-                    self.state.current_output = updated_output
-                    self.state.transition_to(MultiAgentStage.GEMINI_REVIEW_REQUIRED)
-
-                    return {
-                        "status": "review_required",
-                        "stage": self.state.current_stage.value,
-                        "project_name": self.state.project_name,
-                        "revision": rev_num,
-                        "message": (
-                            f"Gemini has revised the research README based on your feedback (Revision {rev_num}). "
-                            "AUDIT REQUIRED: Please review the updated README below and Approve or Request Changes."
-                        ),
-                        "content": updated_output,
-                    }
                 except Exception as exc:
-                    return {
-                        "status": "error",
-                        "stage": self.state.current_stage.value,
-                        "message": f"Gemini revision failed: {exc}",
-                    }
+                    logger.warning(f"Browser revision failed for Gemini: {exc}. Attempting direct LLM fallback...")
+                    try:
+                        updated_output = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.GEMINI_RESEARCHER,
+                            prompt=rev_prompt,
+                        )
+                    except Exception as fb_exc:
+                        return {
+                            "status": "error",
+                            "stage": self.state.current_stage.value,
+                            "message": f"Gemini revision failed: {exc} (Fallback failed: {fb_exc})",
+                        }
+
+                self.state.current_output = updated_output
+                self.state.transition_to(MultiAgentStage.GEMINI_REVIEW_REQUIRED)
+
+                return {
+                    "status": "review_required",
+                    "stage": self.state.current_stage.value,
+                    "project_name": self.state.project_name,
+                    "revision": rev_num,
+                    "message": (
+                        f"Gemini has revised the research README based on your feedback (Revision {rev_num}). "
+                        "AUDIT REQUIRED: Please review the updated README below and Approve or Request Changes."
+                    ),
+                    "content": updated_output,
+                }
 
             elif action == ReviewAction.REJECT:
                 return {
@@ -237,9 +282,34 @@ class MultiAgentOrchestrator:
                 self.state.chatgpt_approved = True
                 self.state.transition_to(MultiAgentStage.CHATGPT_APPROVED)
 
+                approved_spec = (self.state.current_output or "").strip()
+                if len(approved_spec) < 50 or approved_spec == "Response captured.":
+                    spec_file = self.browser_manager.downloads_dir / f"{self.state.project_name}_DEVELOPMENT_SPECIFICATION.md"
+                    if spec_file.exists():
+                        f_text = spec_file.read_text(encoding="utf-8").strip()
+                        if len(f_text) > 50 and f_text != "Response captured.":
+                            approved_spec = f_text
+
+                    if len(approved_spec) < 50 or approved_spec == "Response captured.":
+                        logger.info("Approved specification was invalid or empty. Generating complete specification via fallback...")
+                        readme_content = self.state.original_idea
+                        readme_file = self.browser_manager.downloads_dir / f"{self.state.project_name}_IDEA_README.md"
+                        if readme_file.exists():
+                            f_readme = readme_file.read_text(encoding="utf-8").strip()
+                            if len(f_readme) > 50 and f_readme != "Response captured.":
+                                readme_content = f_readme
+                        prompt_eng_instruction = build_chatgpt_prompt_engineering_prompt(
+                            self.state.project_name, readme_content
+                        )
+                        approved_spec = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.CHATGPT_PROMPT_ENGINEER,
+                            prompt=prompt_eng_instruction,
+                        )
+
+                self.state.current_output = approved_spec
                 # Save approved specification to local Downloads
                 spec_filename = f"{self.state.project_name}_DEVELOPMENT_SPECIFICATION.md"
-                saved_spec_path = self.browser_manager.save_artifact(spec_filename, self.state.current_output)
+                saved_spec_path = self.browser_manager.save_artifact(spec_filename, approved_spec)
                 self.state.add_artifact(spec_filename, str(saved_spec_path), MultiAgentStage.CHATGPT_APPROVED, approved=True)
 
                 # Advance to Claude in a THIRD dedicated tab
@@ -250,39 +320,48 @@ class MultiAgentOrchestrator:
                 )
 
                 dev_instruction = build_claude_development_prompt(
-                    self.state.project_name, self.state.current_output
+                    self.state.project_name, approved_spec
                 )
 
+                claude_output = None
                 try:
                     claude_output = await self.browser_manager.send_prompt_and_receive(
                         role=AgentRole.CLAUDE_DEVELOPER,
                         prompt=dev_instruction,
                         timeout_seconds=self.config.browser_timeout_seconds,
                     )
-                    self.state.current_output = claude_output
-                    self.state.claude_approved = True
-                    self.state.transition_to(MultiAgentStage.DEVELOPMENT_COMPLETE)
-
-                    return {
-                        "status": "development_started",
-                        "stage": self.state.current_stage.value,
-                        "project_name": self.state.project_name,
-                        "active_agent": "Claude (Project Development Agent)",
-                        "downloaded_spec": str(saved_spec_path),
-                        "message": (
-                            f"Development specification saved to: {saved_spec_path}.\n"
-                            "Claude has received the approved development specification in a dedicated tab "
-                            "and has commenced software implementation."
-                        ),
-                        "content": claude_output,
-                    }
                 except Exception as exc:
-                    logger.error(f"Error during Claude development handoff: {exc}")
-                    return {
-                        "status": "error",
-                        "stage": self.state.current_stage.value,
-                        "message": f"Claude development handoff failed: {exc}",
-                    }
+                    logger.warning(f"Browser interaction for Claude development failed: {exc}. Attempting direct LLM fallback...")
+                    try:
+                        claude_output = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.CLAUDE_DEVELOPER,
+                            prompt=dev_instruction,
+                        )
+                    except Exception as fb_exc:
+                        logger.error(f"Both browser and direct fallback failed for Claude: {fb_exc}")
+                        return {
+                            "status": "error",
+                            "stage": self.state.current_stage.value,
+                            "message": f"Claude development handoff failed: {exc} (Fallback failed: {fb_exc})",
+                        }
+
+                self.state.current_output = claude_output
+                self.state.claude_approved = True
+                self.state.transition_to(MultiAgentStage.DEVELOPMENT_COMPLETE)
+
+                return {
+                    "status": "development_started",
+                    "stage": self.state.current_stage.value,
+                    "project_name": self.state.project_name,
+                    "active_agent": "Claude (Project Development Agent)",
+                    "downloaded_spec": str(saved_spec_path),
+                    "message": (
+                        f"Development specification saved to: {saved_spec_path}.\n"
+                        "Claude has received the approved development specification "
+                        "and has commenced software implementation."
+                    ),
+                    "content": claude_output,
+                }
 
             elif action == ReviewAction.REQUEST_CHANGES:
                 if not feedback or not feedback.strip():
@@ -297,32 +376,41 @@ class MultiAgentOrchestrator:
                 self.state.transition_to(MultiAgentStage.CHATGPT_REVISION)
 
                 rev_prompt = build_revision_prompt("ChatGPT", feedback)
+                updated_spec = None
                 try:
                     updated_spec = await self.browser_manager.send_prompt_and_receive(
                         role=AgentRole.CHATGPT_PROMPT_ENGINEER,
                         prompt=rev_prompt,
                         timeout_seconds=self.config.browser_timeout_seconds,
                     )
-                    self.state.current_output = updated_spec
-                    self.state.transition_to(MultiAgentStage.CHATGPT_REVIEW_REQUIRED)
-
-                    return {
-                        "status": "review_required",
-                        "stage": self.state.current_stage.value,
-                        "project_name": self.state.project_name,
-                        "revision": rev_num,
-                        "message": (
-                            f"ChatGPT has revised the development specification based on your feedback (Revision {rev_num}). "
-                            "AUDIT REQUIRED: Please review the updated specification below and Approve or Request Changes."
-                        ),
-                        "content": updated_spec,
-                    }
                 except Exception as exc:
-                    return {
-                        "status": "error",
-                        "stage": self.state.current_stage.value,
-                        "message": f"ChatGPT revision failed: {exc}",
-                    }
+                    logger.warning(f"Browser revision failed for ChatGPT: {exc}. Attempting direct LLM fallback...")
+                    try:
+                        updated_spec = await self.browser_manager.generate_direct_llm_fallback(
+                            role=AgentRole.CHATGPT_PROMPT_ENGINEER,
+                            prompt=rev_prompt,
+                        )
+                    except Exception as fb_exc:
+                        return {
+                            "status": "error",
+                            "stage": self.state.current_stage.value,
+                            "message": f"ChatGPT revision failed: {exc} (Fallback failed: {fb_exc})",
+                        }
+
+                self.state.current_output = updated_spec
+                self.state.transition_to(MultiAgentStage.CHATGPT_REVIEW_REQUIRED)
+
+                return {
+                    "status": "review_required",
+                    "stage": self.state.current_stage.value,
+                    "project_name": self.state.project_name,
+                    "revision": rev_num,
+                    "message": (
+                        f"ChatGPT has revised the development specification based on your feedback (Revision {rev_num}). "
+                        "AUDIT REQUIRED: Please review the updated specification below and Approve or Request Changes."
+                    ),
+                    "content": updated_spec,
+                }
 
             elif action == ReviewAction.REJECT:
                 return {

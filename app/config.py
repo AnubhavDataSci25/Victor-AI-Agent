@@ -121,6 +121,13 @@ class VictorConfig(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     coding: CodingConfig = Field(default_factory=CodingConfig)
     multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
+    api_tools: Any = None  # Populated with ApiToolsConfig
+
+    def __init__(self, **data: Any) -> None:
+        if "api_tools" not in data or data["api_tools"] is None:
+            from app.api_tools.config import ApiToolsConfig
+            data["api_tools"] = ApiToolsConfig()
+        super().__init__(**data)
 
 
 def load_config() -> VictorConfig:

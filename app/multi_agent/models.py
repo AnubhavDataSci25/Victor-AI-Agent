@@ -93,6 +93,10 @@ class WorkflowState(BaseModel):
             revision=len(self.revision_history) + 1,
             approved=approved,
         )
-        self.artifacts.append(record)
+        existing_idx = next((i for i, a in enumerate(self.artifacts) if a.filename == filename), None)
+        if existing_idx is not None:
+            self.artifacts[existing_idx] = record
+        else:
+            self.artifacts.append(record)
         self.updated_at = time.time()
         return record

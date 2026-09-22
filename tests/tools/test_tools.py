@@ -54,3 +54,26 @@ def test_factory_shim_returns_registry():
     assert "browser_search_web" in names
     assert "system_adjust_volume" in names
     assert "computer_take_screenshot" in names
+    assert "webapp_open_claude" in names
+    assert "webapp_open_chatgpt" in names
+    assert "webapp_open_gemini" in names
+
+
+@pytest.mark.asyncio
+async def test_webapp_open_claude_tool():
+    from app.tools.web_apps.tool import WebAppOpenClaudeTool
+    tool = WebAppOpenClaudeTool()
+    assert tool.name == "webapp_open_claude"
+    assert "claude.ai" in tool.description
+    assert tool.parameters == {"type": "object", "properties": {}}
+
+
+@pytest.mark.asyncio
+async def test_browser_open_url_tool_schema():
+    from app.tools.browser.tool import BrowserOpenUrlTool
+    tool = BrowserOpenUrlTool()
+    assert tool.name == "browser_open_url"
+    assert "url" in tool.parameters["properties"]
+    # Empty url test
+    res = await tool.execute({"url": ""})
+    assert "Error: URL is required" in res
