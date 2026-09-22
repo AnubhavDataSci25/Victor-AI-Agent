@@ -111,6 +111,7 @@
         precision highp float;
 
         uniform float uWarning;
+        uniform float uGreen;
         varying float vFlow;
         varying float vDepth;
         varying float vLimb;
@@ -138,33 +139,55 @@
             float softParticle = exp(-distanceToCenter * distanceToCenter * (vHalo > 0.5 ? 4.2 : 18.0));
             float edge = smoothstep(0.38, 0.96, vRadius);
 
-            // Vibrant, luminous non-hollow plasma interior core
-            vec3 core = vec3(0.08, 0.42, 0.85);
+            // Palette 1: Normal Vibrant Blue (Original IDLE / LISTENING / READY)
+            vec3 coreBlue = vec3(0.08, 0.42, 0.85);
             vec3 deepBlue = vec3(0.12, 0.52, 0.95);
-            vec3 electric = vec3(0.0, 0.72, 1.0);
-            vec3 cyan = vec3(0.48, 0.92, 1.0);
-            vec3 warning = vec3(1.0, 0.16, 0.38);
+            vec3 electricBlue = vec3(0.0, 0.72, 1.0);
+            vec3 cyanBlue = vec3(0.48, 0.92, 1.0);
+            vec3 speakingBlue = vec3(0.28, 0.96, 1.0);
+            vec3 listeningBlue = vec3(0.18, 0.25, 0.78);
 
-            vec3 color = mix(core, deepBlue, smoothstep(0.05, 0.60, vRadius));
-            color = mix(color, electric, 0.22 + edge * (0.42 + vBrightness * 0.35));
-            color = mix(color, cyan, vCrest * edge * 0.68 + vFlow * edge * 0.18);
-            color = mix(color, warning, uWarning * (0.35 + 0.65 * edge));
-            color += electric * vFlow * edge * (0.34 + vBrightness * 0.35);
-            color += cyan * vCrest * (0.22 + edge * 0.25 + uAudio * 0.30);
+            // Palette 2: "Victor von Doom" Emerald Green (Thinking / Processing / Executing)
+            vec3 coreGreen = vec3(0.04, 0.42, 0.18);
+            vec3 deepGreen = vec3(0.06, 0.62, 0.28);
+            vec3 electricGreen = vec3(0.05, 0.92, 0.40);
+            vec3 cyanGreen = vec3(0.42, 1.0, 0.65);
+            vec3 speakingGreen = vec3(0.25, 0.98, 0.55);
+            vec3 listeningGreen = vec3(0.05, 0.35, 0.18);
+
+            // Palette 3: Error / Emergency Red
+            vec3 coreRed = vec3(0.45, 0.05, 0.12);
+            vec3 deepRed = vec3(0.78, 0.08, 0.20);
+            vec3 electricRed = vec3(1.0, 0.16, 0.32);
+            vec3 cyanRed = vec3(1.0, 0.55, 0.68);
+            vec3 speakingRed = vec3(1.0, 0.22, 0.38);
+            vec3 listeningRed = vec3(0.45, 0.08, 0.14);
+
+            // Smooth state-based color blending
+            vec3 curCore = mix(mix(coreBlue, coreGreen, uGreen), coreRed, uWarning);
+            vec3 curDeep = mix(mix(deepBlue, deepGreen, uGreen), deepRed, uWarning);
+            vec3 curElectric = mix(mix(electricBlue, electricGreen, uGreen), electricRed, uWarning);
+            vec3 curCyan = mix(mix(cyanBlue, cyanGreen, uGreen), cyanRed, uWarning);
+            vec3 curSpeaking = mix(mix(speakingBlue, speakingGreen, uGreen), speakingRed, uWarning);
+            vec3 curListening = mix(mix(listeningBlue, listeningGreen, uGreen), listeningRed, uWarning);
+
+            vec3 color = mix(curCore, curDeep, smoothstep(0.05, 0.60, vRadius));
+            color = mix(color, curElectric, 0.22 + edge * (0.42 + vBrightness * 0.35));
+            color = mix(color, curCyan, vCrest * edge * 0.68 + vFlow * edge * 0.18);
+            color += curElectric * vFlow * edge * (0.34 + vBrightness * 0.35);
+            color += curCyan * vCrest * (0.22 + edge * 0.25 + uAudio * 0.30);
 
             vec3 mutedConnection = vec3(0.42, 0.55, 0.72);
             float connectionSignal = smoothstep(0.18, 0.92, uConnection);
             color = mix(color * mutedConnection, color, connectionSignal);
-            color += cyan * vConnectionPulse * (0.20 + edge * 0.40);
-            color += electric * uHeartbeatPulse * (0.10 + edge * 0.18);
+            color += curCyan * vConnectionPulse * (0.20 + edge * 0.40);
+            color += curElectric * uHeartbeatPulse * (0.10 + edge * 0.18);
 
-            vec3 speakingCyan = vec3(0.28, 0.96, 1.0);
-            color = mix(color, speakingCyan, uSpeaking * (0.15 + vVocalBeat * 0.20));
-            color += speakingCyan * vVocalBeat * (0.16 + edge * 0.25);
+            color = mix(color, curSpeaking, uSpeaking * (0.15 + vVocalBeat * 0.20));
+            color += curSpeaking * vVocalBeat * (0.16 + edge * 0.25);
 
-            vec3 listeningIndigo = vec3(0.18, 0.25, 0.78);
-            color = mix(color, listeningIndigo, uListening * (0.22 + edge * 0.16));
-            color += listeningIndigo * vListenBeat * (0.08 + edge * 0.12);
+            color = mix(color, curListening, uListening * (0.22 + edge * 0.16));
+            color += curListening * vListenBeat * (0.08 + edge * 0.12);
 
             float depthFade = mix(0.40, 1.0, vDepth);
             float limbFade = mix(0.22, 1.0, vLimb);
@@ -176,17 +199,17 @@
     `;
 
     const PROFILES = {
-        idle:           { energy: 0.36, brightness: 0.72, speed: 0.12, noise: 0.16, pulse: 0.26, halo: 0.42, warning: 0, direction: 0.0 },
-        wake:           { energy: 1.0,  brightness: 1.0,  speed: 1.6,  noise: 0.82, pulse: 1.25, halo: 0.96, warning: 0, direction: 0.42 },
-        listening:      { energy: 0.65, brightness: 0.75, speed: 0.48, noise: 0.44, pulse: 0.82, halo: 0.60, warning: 0, direction: 0.1 },
-        thinking:       { energy: 0.82, brightness: 0.80, speed: 0.75, noise: 0.58, pulse: 0.60, halo: 0.72, warning: 0, direction: -0.10 },
-        processing:     { energy: 0.88, brightness: 0.86, speed: 1.10, noise: 0.76, pulse: 0.72, halo: 0.82, warning: 0, direction: 0.24 },
-        executing:      { energy: 0.95, brightness: 0.94, speed: 1.35, noise: 0.68, pulse: 0.78, halo: 0.86, warning: 0, direction: 0.82 },
-        speaking:       { energy: 0.82, brightness: 0.92, speed: 0.62, noise: 0.50, pulse: 1.22, halo: 0.84, warning: 0, direction: 0.05 },
-        authentication: { energy: 0.45, brightness: 0.60, speed: 0.24, noise: 0.20, pulse: 0.68, halo: 0.48, warning: 0, direction: 0.0 },
-        error:          { energy: 0.52, brightness: 0.72, speed: 0.80, noise: 0.94, pulse: 0.98, halo: 0.70, warning: 1, direction: -0.35 },
-        offline:        { energy: 0.08, brightness: 0.16, speed: 0.03, noise: 0.05, pulse: 0.08, halo: 0.06, warning: 0, direction: 0.0 },
-        locked:         { energy: 0.18, brightness: 0.35, speed: 0.06, noise: 0.08, pulse: 0.14, halo: 0.18, warning: 0, direction: 0.0 },
+        idle:           { energy: 0.36, brightness: 0.72, speed: 0.12, noise: 0.16, pulse: 0.26, halo: 0.42, warning: 0, green: 0, direction: 0.0 },
+        wake:           { energy: 1.0,  brightness: 1.0,  speed: 1.6,  noise: 0.82, pulse: 1.25, halo: 0.96, warning: 0, green: 0, direction: 0.42 },
+        listening:      { energy: 0.65, brightness: 0.75, speed: 0.48, noise: 0.44, pulse: 0.82, halo: 0.60, warning: 0, green: 0, direction: 0.1 },
+        thinking:       { energy: 0.82, brightness: 0.80, speed: 0.75, noise: 0.58, pulse: 0.60, halo: 0.72, warning: 0, green: 1, direction: -0.10 },
+        processing:     { energy: 0.88, brightness: 0.86, speed: 1.10, noise: 0.76, pulse: 0.72, halo: 0.82, warning: 0, green: 1, direction: 0.24 },
+        executing:      { energy: 0.95, brightness: 0.94, speed: 1.35, noise: 0.68, pulse: 0.78, halo: 0.86, warning: 0, green: 1, direction: 0.82 },
+        speaking:       { energy: 0.82, brightness: 0.92, speed: 0.62, noise: 0.50, pulse: 1.22, halo: 0.84, warning: 0, green: 0, direction: 0.05 },
+        authentication: { energy: 0.45, brightness: 0.60, speed: 0.24, noise: 0.20, pulse: 0.68, halo: 0.48, warning: 0, green: 0, direction: 0.0 },
+        error:          { energy: 0.52, brightness: 0.72, speed: 0.80, noise: 0.94, pulse: 0.98, halo: 0.70, warning: 1, green: 0, direction: -0.35 },
+        offline:        { energy: 0.08, brightness: 0.16, speed: 0.03, noise: 0.05, pulse: 0.08, halo: 0.06, warning: 0, green: 0, direction: 0.0 },
+        locked:         { energy: 0.18, brightness: 0.35, speed: 0.06, noise: 0.08, pulse: 0.14, halo: 0.18, warning: 0, green: 0, direction: 0.0 },
     };
 
     function chooseParticleCount() {
@@ -275,8 +298,10 @@
                 errorTimer: null,
             };
 
-            this.target = Object.assign({}, PROFILES.locked);
-            this.visual = Object.assign({}, PROFILES.locked);
+            this.target = Object.assign({ green: 0 }, PROFILES.locked);
+            this.visual = Object.assign({ green: 0 }, PROFILES.locked);
+            this.isProcessingTask = false;
+            this.onMoodChange = null;
 
             this.initThree();
         }
@@ -318,6 +343,7 @@
                     uHigh: { value: 0 },
                     uHalo: { value: this.visual.halo },
                     uWarning: { value: 0 },
+                    uGreen: { value: 0 },
                     uDirection: { value: 0 },
                     uConnection: { value: this.state.connection },
                     uConnectionPulse: { value: 0 },
@@ -370,11 +396,53 @@
             return map[s] || "listening";
         }
 
+        getMood() {
+            if (this.state.current === "error" || (this.target && this.target.warning > 0.5)) {
+                return "error";
+            }
+            if (this.isProcessingTask || (this.target && this.target.green > 0.5)) {
+                return "processing";
+            }
+            return "normal";
+        }
+
+        notifyMoodChange() {
+            if (typeof this.onMoodChange === "function") {
+                this.onMoodChange(this.getMood());
+            }
+        }
+
         setState(stateName) {
             const normalized = this.normalizeState(stateName);
             if (this.state.current === "error" && normalized !== "error") return;
+
+            if (normalized === "error") {
+                this.triggerError();
+                return;
+            }
+
+            // Task execution lifecycle tracking:
+            // When thinking, processing, or executing starts, mark task as active.
+            if (normalized === "thinking" || normalized === "processing" || normalized === "executing") {
+                this.isProcessingTask = true;
+            } else if (normalized === "listening" || normalized === "idle" || normalized === "wake" || 
+                       normalized === "locked" || normalized === "offline" || normalized === "authentication") {
+                // Task completed successfully or returned to standby
+                this.isProcessingTask = false;
+            }
+
             this.state.current = PROFILES[normalized] ? normalized : "idle";
             Object.assign(this.target, PROFILES[this.state.current]);
+
+            // Keep green continuously active throughout the entire task execution lifecycle
+            if (this.isProcessingTask) {
+                this.target.green = 1.0;
+            } else {
+                this.target.green = 0.0;
+            }
+            this.target.warning = 0.0;
+
+            this.notifyMoodChange();
 
             if (this.state.current === "wake") {
                 setTimeout(() => {
@@ -385,12 +453,21 @@
 
         triggerError() {
             if (this.state.errorTimer !== null) clearTimeout(this.state.errorTimer);
-            const prev = this.state.current;
+            const prev = (this.state.current && this.state.current !== "error") ? this.state.current : "listening";
+            this.isProcessingTask = false;
             this.state.current = "error";
             Object.assign(this.target, PROFILES.error);
+            this.target.warning = 1.0;
+            this.target.green = 0.0;
+            this.notifyMoodChange();
+
             this.state.errorTimer = setTimeout(() => {
                 this.state.errorTimer = null;
-                this.setState(prev);
+                this.state.current = prev;
+                Object.assign(this.target, PROFILES[prev] || PROFILES.listening);
+                this.target.warning = 0.0;
+                this.target.green = 0.0;
+                this.notifyMoodChange();
             }, 4000);
         }
 
@@ -420,6 +497,8 @@
             this.visual.pulse += (this.target.pulse - this.visual.pulse) * mixRate;
             this.visual.halo += (this.target.halo - this.visual.halo) * mixRate;
             this.visual.warning += (this.target.warning - this.visual.warning) * mixRate;
+            this.visual.green = this.visual.green || 0;
+            this.visual.green += ((this.target.green || 0) - this.visual.green) * mixRate;
             this.visual.direction += (this.target.direction - this.visual.direction) * mixRate;
 
             // Audio smoothing
@@ -463,6 +542,7 @@
             u.uHigh.value = this.state.high;
             u.uHalo.value = this.visual.halo + this.state.audio * 0.22;
             u.uWarning.value = this.visual.warning;
+            u.uGreen.value = this.visual.green;
             u.uDirection.value = this.visual.direction;
             u.uConnection.value = this.state.connection;
             u.uConnectionPulse.value = this.state.connectionPulse;

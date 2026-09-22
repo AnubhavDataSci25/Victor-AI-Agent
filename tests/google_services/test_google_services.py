@@ -276,6 +276,7 @@ async def test_keep_create_note_success():
     mock_locator.first.is_visible = AsyncMock(return_value=True)
     mock_locator.first.click = AsyncMock()
     mock_locator.first.fill = AsyncMock()
+    mock_locator.locator = MagicMock(return_value=mock_locator)
     mock_page.locator = MagicMock(return_value=mock_locator)
     mock_driver.new_page = AsyncMock(return_value=mock_page)
     mock_driver.get_pages = AsyncMock(return_value=[])

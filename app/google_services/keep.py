@@ -43,92 +43,116 @@ class GoogleKeepService(BaseGoogleService):
             if not is_authed:
                 return auth_msg
 
-            # 1. Click 'Take a note…' to expand the note editor
-            expanded = False
-            take_note_selectors = [
-                '[aria-label="Take a note…"]',
-                'div[role="textbox"]:has-text("Take a note…")',
-                '.notelist-quicknote',
-                'div.notelist-quicknote-compact',
-                'div[contenteditable="true"][aria-label*="Take a note"]',
-            ]
-
-            for sel in take_note_selectors:
+            # Dismiss any previously open note modal dialog
+            if hasattr(page, "keyboard") and page.keyboard:
                 try:
-                    locator = page.locator(sel).first
-                    if await locator.is_visible(timeout=1500):
-                        await locator.click()
-                        expanded = True
-                        break
-                except Exception:
-                    continue
-
-            if not expanded:
-                # Try clicking anywhere in the quicknote area
-                try:
-                    await page.click('div:has-text("Take a note…")', timeout=2000)
-                    expanded = True
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(0.2)
                 except Exception:
                     pass
 
-            # Wait a brief moment for note expansion animation
+            # 1. Target the top quicknote creation container (distinct from existing note cards)
+            editor = page.locator('div.h1U9Be-xhiy4, div.IZ65Hb-n0tgWb:not(.IZ65Hb-WsjYwc-nUpftc), div[class*="quicknote"]').first
+            expanded = False
+
+            if await editor.is_visible(timeout=1500):
+                await editor.click()
+                expanded = True
+            else:
+                take_note_selectors = [
+                    '[aria-label="Take a note…"]',
+                    'div[role="textbox"]:has-text("Take a note…")',
+                    '.notelist-quicknote',
+                    'div.notelist-quicknote-compact',
+                ]
+                for sel in take_note_selectors:
+                    try:
+                        locator = page.locator(sel).first
+                        if await locator.is_visible(timeout=1000):
+                            await locator.click()
+                            expanded = True
+                            break
+                    except Exception:
+                        continue
+
             await asyncio.sleep(0.4)
+
+            def _scoped_loc(parent, fallback_page, selector):
+                try:
+                    res = parent.locator(selector)
+                    if hasattr(res, "first"):
+                        return res.first
+                    if asyncio.iscoroutine(res):
+                        res.close()
+                        return getattr(parent, "first", parent)
+                    return res
+                except Exception:
+                    return fallback_page.locator(selector).first
 
             # 2. Enter Title if provided
             if title:
-                title_selectors = [
-                    'div[placeholder="Title"]',
-                    'input[placeholder="Title"]',
-                    'div[aria-label="Title"]',
-                    'div[contenteditable="true"][aria-label*="Title"]',
-                ]
-                for t_sel in title_selectors:
-                    try:
-                        t_loc = page.locator(t_sel).first
-                        if await t_loc.is_visible(timeout=1000):
-                            await t_loc.fill(title)
-                            break
-                    except Exception:
-                        continue
+                title_el = _scoped_loc(editor, page, 'div[role="textbox"][aria-label="Title"], div[placeholder="Title"], div[aria-label="Title"], input[placeholder="Title"]')
+                if not await title_el.is_visible(timeout=1000):
+                    title_el = page.locator('div[role="textbox"][aria-label="Title"], div[placeholder="Title"]').first
+
+                if await title_el.is_visible(timeout=1000):
+                    await title_el.click()
+                    if hasattr(page, "keyboard") and page.keyboard:
+                        try:
+                            await page.keyboard.type(title, delay=15)
+                        except Exception:
+                            await title_el.fill(title)
+                    else:
+                        await title_el.fill(title)
+
+            await asyncio.sleep(0.2)
 
             # 3. Enter Note Body Content if provided
             if content:
-                body_selectors = [
-                    'div[aria-label="Take a note…"][role="textbox"]',
-                    'div[contenteditable="true"][role="textbox"]',
-                    'div.notelist-quicknote div[contenteditable="true"]',
-                ]
-                for b_sel in body_selectors:
-                    try:
-                        b_loc = page.locator(b_sel).first
-                        if await b_loc.is_visible(timeout=1000):
-                            await b_loc.fill(content)
-                            break
-                    except Exception:
-                        continue
+                # Click into body area to activate ProseMirror contenteditable container
+                body_area = _scoped_loc(editor, page, '.IZ65Hb-qJTHM-haAclf, div[aria-label*="Take a note"]')
+                if await body_area.is_visible(timeout=1000):
+                    await body_area.click()
+                    await asyncio.sleep(0.2)
 
-            # 4. Click 'Close' button to save and commit note
+                body_el = _scoped_loc(editor, page, '.IZ65Hb-qJTHM-haAclf [role="textbox"], .IZ65Hb-qJTHM-haAclf div[contenteditable="true"], div[aria-label*="Take a note"][role="textbox"]')
+                if not await body_el.is_visible(timeout=1000):
+                    body_el = page.locator('div[aria-label*="Take a note…"][role="textbox"], div[contenteditable="true"][role="textbox"]').first
+
+                if await body_el.is_visible(timeout=1000):
+                    await body_el.click()
+                    if hasattr(page, "keyboard") and page.keyboard:
+                        try:
+                            await page.keyboard.type(content, delay=15)
+                        except Exception:
+                            await body_el.fill(content)
+                    else:
+                        await body_el.fill(content)
+
+            await asyncio.sleep(0.3)
+
+            # 4. Click 'Close' button specifically within the editor to commit note
             close_clicked = False
-            close_selectors = [
-                'div[role="button"]:has-text("Close")',
-                'button:has-text("Close")',
-                '[aria-label="Close"]',
-            ]
-            for c_sel in close_selectors:
-                try:
-                    c_loc = page.locator(c_sel).first
-                    if await c_loc.is_visible(timeout=1000):
-                        await c_loc.click()
+            close_btn = _scoped_loc(editor, page, 'div[role="button"]:has-text("Close"), button:has-text("Close")')
+            if await close_btn.is_visible(timeout=1200):
+                await close_btn.click()
+                close_clicked = True
+            else:
+                all_close = page.locator('div[role="button"]:has-text("Close"), button:has-text("Close")')
+                count = await all_close.count()
+                for i in range(count):
+                    btn = all_close.nth(i)
+                    if await btn.is_visible():
+                        await btn.click()
                         close_clicked = True
                         break
-                except Exception:
-                    continue
 
-            if not close_clicked:
+            if not close_clicked and hasattr(page, "keyboard") and page.keyboard:
                 # Press Escape key to commit note
                 await page.keyboard.press("Escape")
 
-            await asyncio.sleep(0.5)
+            # Await cloud sync autosave
+            await asyncio.sleep(1.0)
 
             heading = f"titled '{title}'" if title else "note"
             preview = f" Preview: \"{content[:60]}...\"" if len(content) > 60 else (f" Content: \"{content}\"" if content else "")

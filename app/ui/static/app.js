@@ -356,12 +356,56 @@ if (clearTranscriptBtn) {
 // ==========================================================================
 // STATE & WEBSOCKET MANAGEMENT
 // ==========================================================================
+function applyAtmosphericMood(mood) {
+    if (!document.body) return;
+    if (mood === "processing") {
+        document.body.classList.remove('state-error');
+        document.body.classList.add('state-processing');
+    } else if (mood === "error") {
+        document.body.classList.remove('state-processing');
+        document.body.classList.add('state-error');
+    } else {
+        document.body.classList.remove('state-processing');
+        document.body.classList.remove('state-error');
+    }
+}
+
+function initOrbMoodSync() {
+    if (window.VictorOrbInstance) {
+        window.VictorOrbInstance.onMoodChange = (mood) => {
+            applyAtmosphericMood(mood);
+            if (mood === "normal") {
+                if (orbStateText && orbStateText.textContent === "ERROR") {
+                    orbStateText.textContent = currentState || "LISTENING";
+                }
+                if (globalStatusText && globalStatusText.textContent === "ERROR") {
+                    globalStatusText.textContent = currentState || "ACTIVE";
+                }
+            }
+        };
+        applyAtmosphericMood(window.VictorOrbInstance.getMood());
+    } else {
+        setTimeout(initOrbMoodSync, 100);
+    }
+}
+initOrbMoodSync();
+
 function updateUIState(stateName) {
     if (globalStatusText) globalStatusText.textContent = stateName;
     if (orbStateText) orbStateText.textContent = stateName;
     
     if (window.VictorOrbInstance) {
         window.VictorOrbInstance.setState(stateName);
+        applyAtmosphericMood(window.VictorOrbInstance.getMood());
+    } else {
+        const s = String(stateName || "").toUpperCase();
+        if (s.includes("THINK") || s.includes("PROCESS") || s.includes("EXEC")) {
+            applyAtmosphericMood("processing");
+        } else if (s.includes("ERR") || s.includes("FAIL")) {
+            applyAtmosphericMood("error");
+        } else {
+            applyAtmosphericMood("normal");
+        }
     }
 }
 

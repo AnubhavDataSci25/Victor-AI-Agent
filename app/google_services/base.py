@@ -59,6 +59,12 @@ class BaseGoogleService(abc.ABC):
                     if keyword in page.url.lower():
                         await page.bring_to_front()
                         self._driver.page = page
+                        # If the existing page has a hash (like #NOTE/... or #search/...) or different path, navigate to clean target
+                        if target_url and page.url.rstrip("/") != target_url.rstrip("/"):
+                            try:
+                                await page.goto(target_url, wait_until="domcontentloaded", timeout=12000)
+                            except Exception:
+                                pass
                         return page
                 except Exception:
                     pass

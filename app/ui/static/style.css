@@ -46,9 +46,10 @@ html, body {
     overflow: hidden;
     user-select: none;
     -webkit-font-smoothing: antialiased;
+    transition: background-color 0.8s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Background atmospheric aura */
+/* Background atmospheric aura - Normal Blue */
 body::before {
     content: '';
     position: fixed;
@@ -60,6 +61,51 @@ body::before {
     background: radial-gradient(circle, rgba(0, 119, 255, 0.08) 0%, rgba(0, 229, 255, 0.03) 40%, transparent 70%);
     pointer-events: none;
     z-index: 0;
+    opacity: 1;
+    transition: opacity 0.8s ease;
+}
+
+/* Dynamic overlay atmospheric aura - State-based */
+body::after {
+    content: '';
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 950px;
+    height: 950px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0;
+    transition: opacity 0.8s ease, background 0.8s ease;
+}
+
+/* Victor von Doom State (Thinking / Processing / Executing) */
+body.state-processing {
+    background-color: #010804;
+}
+
+body.state-processing::before {
+    opacity: 0;
+}
+
+body.state-processing::after {
+    opacity: 1;
+    background: radial-gradient(circle, rgba(0, 255, 120, 0.09) 0%, rgba(10, 180, 70, 0.035) 40%, transparent 70%);
+}
+
+/* Error / Emergency State */
+body.state-error {
+    background-color: #090204;
+}
+
+body.state-error::before {
+    opacity: 0;
+}
+
+body.state-error::after {
+    opacity: 1;
+    background: radial-gradient(circle, rgba(255, 35, 65, 0.10) 0%, rgba(180, 20, 45, 0.035) 40%, transparent 70%);
 }
 
 /* App Master Shell */
@@ -505,6 +551,7 @@ body::before {
     border-radius: var(--radius-full);
     backdrop-filter: blur(12px);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 212, 255, 0.15);
+    transition: border-color 0.8s ease, box-shadow 0.8s ease;
 }
 
 .chip-dot {
@@ -514,6 +561,27 @@ body::before {
     background: var(--accent-cyan);
     box-shadow: 0 0 8px var(--accent-cyan);
     animation: chipDotBlink 1.8s infinite ease-in-out;
+    transition: background-color 0.8s ease, box-shadow 0.8s ease;
+}
+
+body.state-processing .orb-state-chip {
+    border-color: rgba(0, 245, 160, 0.45);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 18px rgba(0, 245, 160, 0.20);
+}
+
+body.state-processing .chip-dot {
+    background: var(--accent-emerald);
+    box-shadow: 0 0 8px var(--accent-emerald);
+}
+
+body.state-error .orb-state-chip {
+    border-color: rgba(255, 51, 102, 0.5);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 18px rgba(255, 51, 102, 0.25);
+}
+
+body.state-error .chip-dot {
+    background: var(--accent-rose);
+    box-shadow: 0 0 8px var(--accent-rose);
 }
 
 @keyframes chipDotBlink {
@@ -1305,9 +1373,16 @@ body::before {
    PHONE COMPANION & INCOMING CALL HUD WIDGETS
    ========================================================================== */
 
+.topbar-right {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 10px !important;
+}
+
 .phone-btn {
-    display: flex;
-    align-items: center;
+    display: inline-flex !important;
+    align-items: center !important;
     gap: 8px;
     padding: 6px 14px;
     background: rgba(0, 229, 255, 0.08);
@@ -1320,7 +1395,29 @@ body::before {
     letter-spacing: 1px;
     cursor: pointer;
     transition: all 0.2s ease;
-    margin-right: 10px;
+    margin: 0;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.lock-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px;
+    padding: 6px 14px;
+    background: rgba(255, 51, 102, 0.1);
+    border: 1px solid rgba(255, 51, 102, 0.35);
+    border-radius: var(--radius-sm);
+    color: #ff88a3;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin: 0;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .phone-btn:hover {
