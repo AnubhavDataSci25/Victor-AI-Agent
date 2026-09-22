@@ -61,6 +61,7 @@ class ToolGateway:
         registry: Optional[ToolRegistry] = None,
         permission_engine: Optional[PermissionEngine] = None,
         verifier: Optional[Any] = None,
+        tracer: Optional[Any] = None,
     ) -> None:
         self.registry = registry or build_tool_registry()
         self.permission_engine = permission_engine or PermissionEngine()
@@ -69,8 +70,12 @@ class ToolGateway:
             self.verifier = ResultVerifier()
         else:
             self.verifier = verifier
-        self._traces: list[ExecutionTrace] = []
-        self._max_traces = 100
+
+        if tracer is None:
+            from app.gateway.tracing import get_execution_tracer
+            self.tracer = get_execution_tracer()
+        else:
+            self.tracer = tracer
 
     def classify_risk(self, tool_name: str, args: Dict[str, Any]) -> RiskLevel:
         """Deterministically determine the risk level of an invocation."""
@@ -87,6 +92,19 @@ class ToolGateway:
 
         return RiskLevel.READ_ONLY
 
+    def _record_step(
+        self,
+        trace: ExecutionTrace,
+        phase: str,
+        status: str = "ok",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record an execution milestone through the tracer with sanitization."""
+        if hasattr(self, "tracer") and hasattr(self.tracer, "record_step"):
+            self.tracer.record_step(trace, phase, status=status, details=details)
+        else:
+            trace.add_step(phase, status=status, details=details)
+
     async def execute(
         self,
         request: GatewayRequest,
@@ -98,13 +116,13 @@ class ToolGateway:
         """
         start_time = time.monotonic()
         trace = ExecutionTrace(tool_name=request.tool_name)
-        trace.add_step("REQUEST_RECEIVED", details={"tool": request.tool_name})
+        self._record_step(trace, "REQUEST_RECEIVED", details={"tool": request.tool_name})
 
         # 1. Authentication & Session State Check
         if session_manager is not None:
             if hasattr(session_manager, "is_authenticated") and not session_manager.is_authenticated():
                 err_msg = "Access Denied: Victor session is not authenticated with biometric verification."
-                trace.add_step("AUTH_CHECK", status="failed", details={"error": "unauthenticated"})
+                self._record_step(trace, "AUTH_CHECK", status="failed", details={"error": "unauthenticated"})
                 trace.complete(success=False, error=err_msg)
                 self._record_trace(trace)
                 return GatewayResult(
@@ -120,7 +138,7 @@ class ToolGateway:
             state_val = getattr(getattr(session_manager, "state", None), "value", None)
             if state_val and str(state_val).upper() not in ("ACTIVE", "EXECUTING", "SPEAKING"):
                 err_msg = "Access Denied: Victor session is locked or inactive."
-                trace.add_step("SESSION_STATE_CHECK", status="failed", details={"state": state_val})
+                self._record_step(trace, "SESSION_STATE_CHECK", status="failed", details={"state": state_val})
                 trace.complete(success=False, error=err_msg)
                 self._record_trace(trace)
                 return GatewayResult(
@@ -132,13 +150,13 @@ class ToolGateway:
                     trace_id=trace.trace_id,
                 )
 
-        trace.add_step("AUTH_CHECK", status="ok")
+        self._record_step(trace, "AUTH_CHECK", status="ok")
 
         # 2. Tool Lookup in Registry
         tool = self.registry.get_tool(request.tool_name)
         if tool is None:
             err_msg = f"Tool '{request.tool_name}' is not registered."
-            trace.add_step("TOOL_LOOKUP", status="failed", details={"error": "not_found"})
+            self._record_step(trace, "TOOL_LOOKUP", status="failed", details={"error": "not_found"})
             trace.complete(success=False, error=err_msg)
             self._record_trace(trace)
             return GatewayResult(
@@ -150,7 +168,7 @@ class ToolGateway:
                 trace_id=trace.trace_id,
             )
 
-        trace.add_step("TOOL_LOOKUP", status="ok")
+        self._record_step(trace, "TOOL_LOOKUP", status="ok")
 
         # 3. Risk & Permission Evaluation
         risk_level = self.classify_risk(request.tool_name, request.arguments)
@@ -189,7 +207,8 @@ class ToolGateway:
         else:
             perm_decision = self.permission_engine.decide(perm_level, confirmed=is_confirmed)
 
-        trace.add_step(
+        self._record_step(
+            trace,
             "PERMISSION_CHECK",
             status=perm_decision.value,
             details={"level": perm_level.value, "risk": risk_level.value, "confirmed": is_confirmed},
@@ -230,7 +249,7 @@ class ToolGateway:
             )
 
         # 4. Tool Execution
-        trace.add_step("TOOL_EXECUTION_STARTED")
+        self._record_step(trace, "TOOL_EXECUTION_STARTED")
         try:
             if isinstance(tool, BaseTool):
                 raw_result = await tool.execute(request.arguments)
@@ -241,12 +260,12 @@ class ToolGateway:
             else:
                 raw_result = await self.registry.execute(request.tool_name, request.arguments)
 
-            trace.add_step("TOOL_EXECUTION_COMPLETED", status="ok")
+            self._record_step(trace, "TOOL_EXECUTION_COMPLETED", status="ok")
         except Exception as exc:
             duration_ms = (time.monotonic() - start_time) * 1000
             err_msg = f"Tool execution failed: {exc}"
             logger.error(f"[Gateway] {request.tool_name} error: {exc}")
-            trace.add_step("TOOL_EXECUTION_COMPLETED", status="failed", details={"error": str(exc)})
+            self._record_step(trace, "TOOL_EXECUTION_COMPLETED", status="failed", details={"error": str(exc)})
             trace.complete(success=False, error=err_msg)
             self._record_trace(trace)
             log_tool_call(
@@ -269,7 +288,8 @@ class ToolGateway:
 
         # 5. Result Verification Hook
         verification_res = await self.verifier.verify(request.tool_name, request.arguments, raw_result)
-        trace.add_step(
+        self._record_step(
+            trace,
             "RESULT_VERIFICATION",
             status=verification_res.status.value,
             details={"details": verification_res.details, "verified": verification_res.verified},
@@ -352,14 +372,15 @@ class ToolGateway:
         await session_manager.lock()
 
     def _record_trace(self, trace: ExecutionTrace) -> None:
-        """Store trace in bounded ring buffer."""
-        self._traces.append(trace)
-        if len(self._traces) > self._max_traces:
-            self._traces.pop(0)
+        """Store trace into tracer ring buffer."""
+        if hasattr(self, "tracer") and hasattr(self.tracer, "complete_trace"):
+            self.tracer.complete_trace(trace, success=trace.success, error=trace.error)
 
     def get_recent_traces(self, limit: int = 10) -> list[ExecutionTrace]:
         """Retrieve the most recent execution traces."""
-        return self._traces[-limit:]
+        if hasattr(self, "tracer") and hasattr(self.tracer, "get_traces"):
+            return self.tracer.get_traces(limit=limit)
+        return []
 
 
 # Global singleton instance

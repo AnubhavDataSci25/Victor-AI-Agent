@@ -10,6 +10,7 @@ from app.gateway.models import (
     TraceStep,
 )
 from app.gateway.tool_gateway import ToolGateway, get_tool_gateway
+from app.gateway.tracing import ExecutionTracer, get_execution_tracer, redact_sensitive
 
 __all__ = [
     "RiskLevel",
@@ -19,4 +20,7 @@ __all__ = [
     "GatewayResult",
     "ToolGateway",
     "get_tool_gateway",
+    "ExecutionTracer",
+    "get_execution_tracer",
+    "redact_sensitive",
 ]
