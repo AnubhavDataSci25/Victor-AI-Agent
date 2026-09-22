@@ -110,7 +110,9 @@ class MultiAgentConfig(BaseModel):
 
 class DecisionConfig(BaseModel):
     """Decision Layer & TypeSafe Jev settings via OpenRouter."""
-    openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
+    openrouter_api_key: str = Field(
+        default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "") or os.getenv("JEV_API_KEY", "")
+    )
     openrouter_base_url: str = Field(default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
     jev_model: str = Field(default_factory=lambda: os.getenv("JEV_MODEL", "~typesafe/jev-latest"))
     timeout_seconds: float = 4.0
