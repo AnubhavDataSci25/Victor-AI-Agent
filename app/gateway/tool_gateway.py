@@ -60,9 +60,15 @@ class ToolGateway:
         self,
         registry: Optional[ToolRegistry] = None,
         permission_engine: Optional[PermissionEngine] = None,
+        verifier: Optional[Any] = None,
     ) -> None:
         self.registry = registry or build_tool_registry()
         self.permission_engine = permission_engine or PermissionEngine()
+        if verifier is None:
+            from app.verification.verifier import ResultVerifier
+            self.verifier = ResultVerifier()
+        else:
+            self.verifier = verifier
         self._traces: list[ExecutionTrace] = []
         self._max_traces = 100
 
@@ -261,31 +267,34 @@ class ToolGateway:
                 trace_id=trace.trace_id,
             )
 
-        # 5. Deterministic Result Verification Hook
-        verification_status = True
-        verification_details = "Verified deterministically"
-        trace.add_step("RESULT_VERIFICATION", status="ok", details={"details": verification_details})
+        # 5. Result Verification Hook
+        verification_res = await self.verifier.verify(request.tool_name, request.arguments, raw_result)
+        trace.add_step(
+            "RESULT_VERIFICATION",
+            status=verification_res.status.value,
+            details={"details": verification_res.details, "verified": verification_res.verified},
+        )
 
         duration_ms = (time.monotonic() - start_time) * 1000
-        trace.complete(success=True)
+        trace.complete(success=verification_res.verified)
         self._record_trace(trace)
 
         log_tool_call(
             tool=request.tool_name,
             arguments=request.arguments,
             permission_level=perm_level.value,
-            success=True,
+            success=verification_res.verified,
             duration_ms=duration_ms,
         )
 
         return GatewayResult(
             tool_name=request.tool_name,
-            success=True,
+            success=verification_res.verified,
             result=raw_result,
             permission_level=perm_level.value,
             risk_level=risk_level,
-            verified=verification_status,
-            verification_details=verification_details,
+            verified=verification_res.verified,
+            verification_details=verification_res.details,
             duration_ms=duration_ms,
             trace_id=trace.trace_id,
         )
