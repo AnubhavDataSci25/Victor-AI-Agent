@@ -108,6 +108,15 @@ class MultiAgentConfig(BaseModel):
     simulate_responses: bool = Field(default_factory=lambda: os.getenv("MULTI_AGENT_SIMULATE", "").lower() in ("true", "1", "yes"))
 
 
+class DecisionConfig(BaseModel):
+    """Decision Layer & TypeSafe Jev settings via OpenRouter."""
+    openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
+    openrouter_base_url: str = Field(default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
+    jev_model: str = Field(default_factory=lambda: os.getenv("JEV_MODEL", "~typesafe/jev-latest"))
+    timeout_seconds: float = 4.0
+    enabled: bool = True
+
+
 class VictorConfig(BaseModel):
     """Top-level configuration for Victor 2.0."""
     host: str = "0.0.0.0"
@@ -121,6 +130,7 @@ class VictorConfig(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     coding: CodingConfig = Field(default_factory=CodingConfig)
     multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
+    decision: DecisionConfig = Field(default_factory=DecisionConfig)
     api_tools: Any = None  # Populated with ApiToolsConfig
 
     def __init__(self, **data: Any) -> None:
@@ -183,6 +193,17 @@ def load_config() -> VictorConfig:
         multi_agent_cfg["downloads_dir"] = os.getenv("MULTI_AGENT_DOWNLOADS_DIR")
     if multi_agent_cfg:
         yaml_data["multi_agent"] = multi_agent_cfg
+
+    # Decision overrides
+    decision_cfg = yaml_data.get("decision", {})
+    if os.getenv("OPENROUTER_API_KEY"):
+        decision_cfg["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY")
+    if os.getenv("JEV_MODEL"):
+        decision_cfg["jev_model"] = os.getenv("JEV_MODEL")
+    if os.getenv("OPENROUTER_BASE_URL"):
+        decision_cfg["openrouter_base_url"] = os.getenv("OPENROUTER_BASE_URL")
+    if decision_cfg:
+        yaml_data["decision"] = decision_cfg
 
     merged = {**yaml_data, **env_overrides}
     return VictorConfig(**merged)
