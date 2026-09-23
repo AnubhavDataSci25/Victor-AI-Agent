@@ -375,11 +375,13 @@ function initOrbMoodSync() {
         window.VictorOrbInstance.onMoodChange = (mood) => {
             applyAtmosphericMood(mood);
             if (mood === "normal") {
-                if (orbStateText && orbStateText.textContent === "ERROR") {
-                    orbStateText.textContent = currentState || "LISTENING";
-                }
-                if (globalStatusText && globalStatusText.textContent === "ERROR") {
-                    globalStatusText.textContent = currentState || "ACTIVE";
+                if (currentState !== "ERROR" && currentState !== "OFFLINE") {
+                    if (orbStateText && orbStateText.textContent === "ERROR") {
+                        orbStateText.textContent = currentState || "LISTENING";
+                    }
+                    if (globalStatusText && globalStatusText.textContent === "ERROR") {
+                        globalStatusText.textContent = currentState || "ACTIVE";
+                    }
                 }
             }
         };
@@ -391,14 +393,14 @@ function initOrbMoodSync() {
 initOrbMoodSync();
 
 function updateUIState(stateName) {
-    if (globalStatusText) globalStatusText.textContent = stateName;
-    if (orbStateText) orbStateText.textContent = stateName;
+    const s = String(stateName || "").toUpperCase();
+    if (globalStatusText) globalStatusText.textContent = s;
+    if (orbStateText) orbStateText.textContent = s;
     
     if (window.VictorOrbInstance) {
-        window.VictorOrbInstance.setState(stateName);
+        window.VictorOrbInstance.setState(s);
         applyAtmosphericMood(window.VictorOrbInstance.getMood());
     } else {
-        const s = String(stateName || "").toUpperCase();
         if (s.includes("THINK") || s.includes("PROCESS") || s.includes("EXEC")) {
             applyAtmosphericMood("processing");
         } else if (s.includes("ERR") || s.includes("FAIL")) {
@@ -911,6 +913,9 @@ ws.onmessage = (event) => {
             }
 
         } else if (message.type === "orb_state") {
+            if (message.state === "ERROR") {
+                currentState = "ERROR";
+            }
             updateUIState(message.state);
 
         } else if (message.type === "transcript") {

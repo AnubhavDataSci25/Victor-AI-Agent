@@ -20,6 +20,7 @@ class LiveSessionManager:
         self.receive_task = None
         self.is_connected = False
         self._ctx = None
+        self._turn_tool_counts: dict[str, int] = {}
         
         # Instantiate Tool Dispatcher
         self.tool_dispatcher = LiveToolDispatcher(self.session_manager)
@@ -195,6 +196,7 @@ class LiveSessionManager:
                         # When model finishes speaking its turn, go to LISTENING
                         # (not IDLE — IDLE would stop the orb reactivity)
                         if getattr(server_content, "turn_complete", False):
+                            self._turn_tool_counts = {}
                             await self.session_manager.websocket_send_callback({
                                 "type": "orb_state",
                                 "state": "LISTENING"
@@ -212,6 +214,27 @@ class LiveSessionManager:
                         
                         function_responses = []
                         for fc in tool_call.function_calls:
+                            # Circuit breaker: detect and prevent infinite tool execution loops
+                            tool_count = self._turn_tool_counts.get(fc.name, 0) + 1
+                            self._turn_tool_counts[fc.name] = tool_count
+                            if tool_count > 3:
+                                logger.warning(
+                                    f"[Live Session] Tool call loop circuit breaker triggered for '{fc.name}' ({tool_count} calls in single turn)."
+                                )
+                                f_resp = types.FunctionResponse(
+                                    name=fc.name,
+                                    id=getattr(fc, "id", None),
+                                    response={
+                                        "result": (
+                                            f"Execution loop prevented: Tool '{fc.name}' was called {tool_count} times in succession. "
+                                            "Please inform the user of the status and wait for explicit verbal instruction."
+                                        ),
+                                        "status": "failed",
+                                    },
+                                )
+                                function_responses.append(f_resp)
+                                continue
+
                             await self.session_manager.websocket_send_callback({
                                 "type": "tool_execution",
                                 "tool": fc.name,
@@ -242,31 +265,90 @@ class LiveSessionManager:
             pass
         except Exception as e:
             logger.error(f"Error in Gemini receive loop: {e}")
+            self.is_connected = False
+            await self.session_manager.set_state(VictorState.ERROR)
             await self.session_manager.websocket_send_callback({
                 "type": "orb_state",
                 "state": "ERROR"
             })
+            await self.session_manager.websocket_send_callback({
+                "type": "transcript",
+                "role": "assistant",
+                "text": "⚠️ Gemini connection encountered an internal error. Attempting automatic reconnection...",
+            })
+
+            # Attempt automatic reconnection if session is currently authenticated
+            if hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated():
+                asyncio.create_task(self._reconnect_after_error())
         finally:
             self.is_connected = False
             
-    async def send_audio(self, pcm_chunk: bytes):
-        if self.is_connected and self.session:
+    async def _reconnect_after_error(self, max_retries: int = 3):
+        """Attempts graceful reconnection to Gemini Live after an unexpected socket disconnect."""
+        logger.info("[Live Session] Starting auto-reconnect task...")
+        await self.close()
+
+        for attempt in range(1, max_retries + 1):
+            if not self.session_manager.is_authenticated():
+                logger.info("[Live Session] Session not authenticated; aborting auto-reconnect.")
+                return
+
+            delay = 2.0 * attempt
+            logger.info(f"[Live Session] Reconnection attempt {attempt}/{max_retries} in {delay:.1f}s...")
+            await asyncio.sleep(delay)
+
             try:
-                if hasattr(self.session, "send_realtime_input"):
-                    await self.session.send_realtime_input(
-                        audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
-                    )
-                else:
-                    await self.session.send(input=types.LiveClientRealtimeInput(
-                        audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
-                    ))
-            except Exception as e:
+                reconnected = await self.start()
+                if reconnected:
+                    logger.info("[Live Session] Successfully reconnected to Gemini Live!")
+                    await self.session_manager.set_state(VictorState.ACTIVE)
+                    await self.session_manager.websocket_send_callback({
+                        "type": "orb_state",
+                        "state": "LISTENING",
+                    })
+                    await self.session_manager.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": "Gemini Live connection restored, Sir. Ready for your commands.",
+                    })
+                    return
+            except Exception as rec_err:
+                logger.warning(f"[Live Session] Reconnect attempt {attempt} failed: {rec_err}")
+
+        # All retries exhausted - remain in explicit ERROR state
+        logger.error("[Live Session] All reconnection attempts failed. Victor is in ERROR state.")
+        await self.session_manager.set_state(VictorState.ERROR)
+        await self.session_manager.websocket_send_callback({
+            "type": "orb_state",
+            "state": "ERROR",
+        })
+        await self.session_manager.websocket_send_callback({
+            "type": "transcript",
+            "role": "assistant",
+            "text": "Connection to Gemini Live could not be restored automatically. Please say or type a command to retry, Sir.",
+        })
+
+    async def send_audio(self, pcm_chunk: bytes):
+        if not self.is_connected or not self.session:
+            return  # Drop silently while disconnected, avoids flooding 1011 logs
+
+        try:
+            if hasattr(self.session, "send_realtime_input"):
+                await self.session.send_realtime_input(
+                    audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
+                )
+            else:
+                await self.session.send(input=types.LiveClientRealtimeInput(
+                    audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
+                ))
+        except Exception as e:
+            if self.is_connected:
                 logger.error(f"Error sending audio chunk to Gemini Live: {e}")
-        else:
-            logger.debug("send_audio dropped chunk: session is not connected.")
+                self.is_connected = False
 
     async def send_text(self, text: str):
         """Sends user text turn to Gemini Live session."""
+        self._turn_tool_counts = {}
         if self.is_connected and self.session:
             try:
                 # Update visual state to THINKING

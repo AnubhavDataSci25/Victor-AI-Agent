@@ -463,6 +463,10 @@
 
             this.state.errorTimer = setTimeout(() => {
                 this.state.errorTimer = null;
+                // If system is currently in persistent ERROR state, do NOT reset to listening/blue!
+                if (typeof currentState !== "undefined" && (currentState === "ERROR" || currentState === "OFFLINE")) {
+                    return;
+                }
                 this.state.current = prev;
                 Object.assign(this.target, PROFILES[prev] || PROFILES.listening);
                 this.target.warning = 0.0;

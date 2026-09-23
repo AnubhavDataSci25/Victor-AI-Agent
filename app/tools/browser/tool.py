@@ -143,7 +143,7 @@ class BrowserCloseTabTool(BaseTool):
     }
 
     async def execute(self, args: dict) -> str:
-        user_confirmed = args.get("user_confirmed", False)
+        user_confirmed = bool(args.get("user_confirmed", False) or args.get("confirmed", False))
         if not user_confirmed:
             return (
                 "CONFIRMATION REQUIRED: Closing a browser tab may cause unsaved work to be lost. "
@@ -186,7 +186,7 @@ class BrowserCloseTool(BaseTool):
     }
 
     async def execute(self, args: dict) -> str:
-        user_confirmed = args.get("user_confirmed", False)
+        user_confirmed = bool(args.get("user_confirmed", False) or args.get("confirmed", False))
         if not user_confirmed:
             return (
                 "CONFIRMATION REQUIRED: Closing the browser will terminate all open tabs and end the browser session. "

@@ -201,11 +201,23 @@ class ToolGateway:
         trace.permission_level = perm_level.value
 
         # Check explicit confirmation for high-risk / destructive actions
-        is_confirmed = request.is_confirmed or bool(request.arguments.get("confirmed", False))
-        if risk_level == RiskLevel.DESTRUCTIVE and not is_confirmed:
+        is_confirmed = (
+            request.is_confirmed
+            or bool(request.arguments.get("confirmed", False))
+            or bool(request.arguments.get("user_confirmed", False))
+        )
+
+        if perm_level == PermissionLevel.BLOCKED:
+            perm_decision = PermissionDecision.DENIED
+        elif is_confirmed:
+            perm_decision = PermissionDecision.ALLOWED
+        elif risk_level == RiskLevel.DESTRUCTIVE:
             perm_decision = PermissionDecision.REQUIRES_CONFIRMATION
-        else:
+        elif isinstance(tool, Tool):
             perm_decision = self.permission_engine.decide(perm_level, confirmed=is_confirmed)
+        else:
+            # BaseTool handles its own specialized verbal confirmations in execute()
+            perm_decision = PermissionDecision.ALLOWED
 
         self._record_step(
             trace,
@@ -354,6 +366,7 @@ class ToolGateway:
                 name=tool_name,
                 id=call_id,
                 response={
+                    "result": gateway_res.confirmation_prompt,
                     "status": "requires_confirmation",
                     "confirmation_prompt": gateway_res.confirmation_prompt,
                     "risk_level": gateway_res.risk_level.value,
@@ -363,7 +376,11 @@ class ToolGateway:
         return types.FunctionResponse(
             name=tool_name,
             id=call_id,
-            response={"error": gateway_res.error or "Execution failed", "status": "failed"},
+            response={
+                "result": gateway_res.error or "Execution failed",
+                "error": gateway_res.error or "Execution failed",
+                "status": "failed",
+            },
         )
 
     async def _delayed_lock(self, session_manager: Any) -> None:
