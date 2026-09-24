@@ -22,6 +22,47 @@ class MemoryManager:
         self.store = MemoryStore(db_path=db_path)
         self.session = SessionMemory(max_turns=10)
         self.max_recall_results = max_recall_results
+        self._pending_memory: Optional[dict[str, Any]] = None
+
+    def set_pending_memory(
+        self,
+        key: str,
+        content: str,
+        category: str = "user_fact",
+        tags: Optional[List[str]] = None,
+    ) -> None:
+        """Stores a candidate memory awaiting explicit user confirmation."""
+        self._pending_memory = {
+            "key": key,
+            "content": content,
+            "category": category,
+            "tags": tags or [],
+        }
+        logger.info(f"Set pending memory for confirmation: [{category}] '{key}'")
+
+    def get_pending_memory(self) -> Optional[dict[str, Any]]:
+        """Returns the current pending memory candidate if any."""
+        return self._pending_memory
+
+    def clear_pending_memory(self) -> None:
+        """Clears the pending memory candidate."""
+        self._pending_memory = None
+
+    def confirm_pending_memory(self) -> Tuple[bool, str]:
+        """
+        Commits the currently pending memory candidate to persistent SQLite store upon user affirmation.
+        """
+        if not self._pending_memory:
+            return False, "No pending memory candidate to confirm."
+
+        candidate = self._pending_memory
+        self._pending_memory = None
+        return self.remember(
+            key=candidate["key"],
+            content=candidate["content"],
+            category=candidate.get("category", "user_fact"),
+            tags=candidate.get("tags", []),
+        )
 
     def remember(
         self,
@@ -96,21 +137,35 @@ class MemoryManager:
         lines.append("]")
         return "\n".join(lines)
 
-    def get_core_profile_context(self, limit: int = 5) -> str:
+    def get_core_profile_context(self, limit: int = 15) -> str:
         """
-        Returns stable top user preferences formatted for inclusion in
-        the session system instruction at connection time.
+        Returns stable top user preferences, facts, and project notes across all categories
+        formatted for inclusion in the session system instruction at connection time.
+        Preserves knowledge across browser restarts and session closures.
         """
         prefs = self.store.list_by_category("preference", limit=limit)
-        if not prefs:
+        facts = self.store.list_by_category("user_fact", limit=limit)
+        projects = self.store.list_by_category("project", limit=limit)
+        instructions = self.store.list_by_category("instruction", limit=limit)
+
+        if not prefs and not facts and not projects and not instructions:
             return ""
 
-        items = [f"{p.key}: {p.content}" for p in prefs]
-        return "Known user preferences: " + "; ".join(items) + "."
+        sections = []
+        if prefs:
+            sections.append("Preferences: " + "; ".join(f"{p.key}: {p.content}" for p in prefs))
+        if facts:
+            sections.append("User Facts: " + "; ".join(f"{f.key}: {f.content}" for f in facts))
+        if projects:
+            sections.append("Projects: " + "; ".join(f"{pr.key}: {pr.content}" for pr in projects))
+        if instructions:
+            sections.append("Instructions: " + "; ".join(f"{i.key}: {i.content}" for i in instructions))
+
+        return "Known user profile & persistent memory across sessions: [" + " | ".join(sections) + "]."
 
     def extract_and_store_preference(self, text: str) -> Optional[str]:
         """
-        Lightweight heuristic rule extractor for natural preference statements.
+        Lightweight heuristic rule extractor for natural preference and fact statements.
         Runs asynchronously / after turn without blocking or making LLM calls.
         Example: "My preferred coding language is Python."
         """
@@ -130,14 +185,33 @@ class MemoryManager:
                 return key
 
         # Pattern 2: "Remember that [statement]"
-        m2 = re.search(r"\bremember\s+that\s+(.+)$", clean, re.IGNORECASE)
+        m2 = re.search(r"\b(?:remember\s+that|remember)\s+(.+)$", clean, re.IGNORECASE)
         if m2:
             statement = m2.group(1).strip().rstrip(".")
-            # Build key from first few words
             words = re.findall(r"\w+", statement)
             key = "_".join(words[:4]).lower() if words else "user_note"
             success, _ = self.remember(key=key, content=statement, category="project", tags=words[:5])
             if success:
                 return key
 
+        # Pattern 3: "My favorite/favourite [thing] is [value]"
+        m3 = re.search(r"\bmy\s+favou?rite\s+([a-zA-Z0-9_\s]{2,25})\s+is\s+([a-zA-Z0-9_\-\+\#\.\s]{1,40})\b", clean, re.IGNORECASE)
+        if m3:
+            thing = m3.group(1).strip().lower().replace(" ", "_")
+            value = m3.group(2).strip()
+            key = f"favorite_{thing}"
+            success, _ = self.remember(key=key, content=value, category="preference", tags=[thing, value])
+            if success:
+                return key
+
+        # Pattern 4: "I live in [place]" / "My location is [place]"
+        m4 = re.search(r"\b(?:i\s+live\s+in|my\s+location\s+is)\s+([a-zA-Z\s]{2,30})\b", clean, re.IGNORECASE)
+        if m4:
+            place = m4.group(1).strip()
+            key = "home_location"
+            success, _ = self.remember(key=key, content=f"Lives in {place}", category="user_fact", tags=["location", place.lower()])
+            if success:
+                return key
+
         return None
+

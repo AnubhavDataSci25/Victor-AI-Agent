@@ -1,7 +1,9 @@
 import os
+import time
 import asyncio
 import base64
 import logging
+from typing import Any, Dict, Optional
 from google import genai
 from google.genai import types
 
@@ -21,9 +23,68 @@ class LiveSessionManager:
         self.is_connected = False
         self._ctx = None
         self._turn_tool_counts: dict[str, int] = {}
+        self._recent_tool_calls: list[tuple[str, float]] = []
+        self.decision_engine = None
+        self.is_in_cooldown: bool = False
+        self.cooldown_task: Optional[asyncio.Task] = None
         
         # Instantiate Tool Dispatcher
         self.tool_dispatcher = LiveToolDispatcher(self.session_manager)
+
+    def _get_decision_engine(self):
+        if self.decision_engine is None:
+            from app.decision.engine import DecisionEngine
+            self.decision_engine = DecisionEngine()
+        return self.decision_engine
+
+    async def _process_turn_memory(self, text: str):
+        """
+        Evaluates user turns with DecisionEngine/Jev to categorize priority and
+        either persist to SQLite memory or ask the user for confirmation.
+        """
+        if not text or not hasattr(self.session_manager, "memory"):
+            return
+
+        try:
+            engine = self._get_decision_engine()
+            decision = await engine.evaluate_memory_worthiness(text)
+            if not decision.is_worthy:
+                return
+
+            mem = self.session_manager.memory
+            fact_summary = decision.extracted_fact or text
+            key = decision.suggested_key or "user_fact"
+
+            if decision.should_ask_user:
+                # Prompt user for confirmation (User Consent Flow)
+                mem.set_pending_memory(
+                    key=key,
+                    content=fact_summary,
+                    category=decision.category,
+                )
+                ask_msg = f"Sir, would you like me to remember that {fact_summary} in your persistent long-term memory?"
+                await self.session_manager.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": ask_msg,
+                })
+                logger.info(f"[Live Session] Prompted user to confirm memory: [{decision.category}] '{key}'")
+            elif decision.priority in ("high", "medium"):
+                # Persist high-priority facts/preferences directly
+                ok, msg = mem.remember(
+                    key=key,
+                    content=fact_summary,
+                    category=decision.category,
+                )
+                if ok:
+                    await self.session_manager.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "system",
+                        "text": f"💾 Saved to persistent memory: {fact_summary}",
+                    })
+                    logger.info(f"[Live Session] Auto-persisted durable memory: [{decision.category}] '{key}'")
+        except Exception as e:
+            logger.debug(f"[Live Session] Turn memory evaluation error: {e}")
 
     async def start(self) -> bool:
         logger.info(f"Connecting to Gemini Live API ({self.model})...")
@@ -181,6 +242,8 @@ class LiveSessionManager:
                                     self.session_manager.memory.extract_and_store_preference(input_tx.text)
                                 except Exception as e:
                                     logger.debug(f"Async preference extraction error: {e}")
+                                asyncio.create_task(self._process_turn_memory(input_tx.text))
+
 
                         # Handle assistant live output transcription
                         output_tx = getattr(server_content, "output_transcription", None)
@@ -213,26 +276,44 @@ class LiveSessionManager:
                         })
                         
                         function_responses = []
+                        now = time.time()
+                        # Prune recorded tool calls older than 15 seconds
+                        self._recent_tool_calls = [
+                            (name, ts) for name, ts in self._recent_tool_calls
+                            if (now - ts) < 15.0
+                        ]
+
                         for fc in tool_call.function_calls:
-                            # Circuit breaker: detect and prevent infinite tool execution loops
-                            tool_count = self._turn_tool_counts.get(fc.name, 0) + 1
-                            self._turn_tool_counts[fc.name] = tool_count
-                            if tool_count > 3:
+                            # Rolling window circuit breaker: prevent rapid tool execution loops
+                            recent_count = sum(1 for name, _ in self._recent_tool_calls if name == fc.name) + 1
+                            self._recent_tool_calls.append((fc.name, now))
+
+                            turn_count = self._turn_tool_counts.get(fc.name, 0) + 1
+                            self._turn_tool_counts[fc.name] = turn_count
+
+                            if recent_count > 3 or turn_count > 3:
                                 logger.warning(
-                                    f"[Live Session] Tool call loop circuit breaker triggered for '{fc.name}' ({tool_count} calls in single turn)."
+                                    f"[Live Session] Tool call loop circuit breaker triggered for '{fc.name}' "
+                                    f"({recent_count} calls within 15s window, {turn_count} in single turn)."
                                 )
                                 f_resp = types.FunctionResponse(
                                     name=fc.name,
                                     id=getattr(fc, "id", None),
                                     response={
                                         "result": (
-                                            f"Execution loop prevented: Tool '{fc.name}' was called {tool_count} times in succession. "
-                                            "Please inform the user of the status and wait for explicit verbal instruction."
+                                            f"Execution loop prevented: Tool '{fc.name}' was called {recent_count} times in rapid succession. "
+                                            "Do NOT retry this tool. Inform the user that the operation failed or cannot be completed at this time, "
+                                            "and ask for clarification or wait for their next command."
                                         ),
                                         "status": "failed",
                                     },
                                 )
                                 function_responses.append(f_resp)
+                                await self.session_manager.websocket_send_callback({
+                                    "type": "transcript",
+                                    "role": "assistant",
+                                    "text": f"⚠️ Loop prevented: Repeated requests to '{fc.name}' stopped.",
+                                })
                                 continue
 
                             await self.session_manager.websocket_send_callback({
@@ -264,29 +345,134 @@ class LiveSessionManager:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Error in Gemini receive loop: {e}")
+            err_msg = str(e)
+            logger.error(f"Error in Gemini receive loop: {err_msg}")
             self.is_connected = False
             await self.session_manager.set_state(VictorState.ERROR)
             await self.session_manager.websocket_send_callback({
                 "type": "orb_state",
                 "state": "ERROR"
             })
+
+            # Check for 1011 / Internal Server Error condition
+            is_1011 = ("1011" in err_msg) or ("internal error" in err_msg.lower()) or ("internal_error" in err_msg.lower())
+
+            if hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated():
+                if is_1011:
+                    logger.warning(f"[Live Session] Gemini Live 1011 Internal Error encountered. Entering 2-minute cooldown standby.")
+                    self.is_in_cooldown = True
+                    if self.cooldown_task and not self.cooldown_task.done():
+                        self.cooldown_task.cancel()
+                    self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=120))
+                else:
+                    await self.session_manager.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": "⚠️ Gemini connection encountered an error. Attempting automatic reconnection...",
+                    })
+                    asyncio.create_task(self._reconnect_after_error())
+        finally:
+            self.is_connected = False
+
+    async def _standby_and_restart(self, delay_seconds: int = 120):
+        """
+        Enters a 2-minute cooling standby when error 1011 / internal error occurs.
+        Periodically updates the UI and automatically reconnects without requiring a page refresh.
+        """
+        self.is_in_cooldown = True
+        logger.info(f"[Live Session] Entering {delay_seconds}s cooldown standby due to error 1011...")
+        await self.close(clear_cooldown=False)
+
+        await self.session_manager.websocket_send_callback({
+            "type": "transcript",
+            "role": "assistant",
+            "text": (
+                "⚠️ Gemini Live encountered an internal error (1011). Entering 2-minute cooldown standby. "
+                "Victor will automatically reconnect without refreshing the page."
+            ),
+        })
+        await self.session_manager.websocket_send_callback({
+            "type": "cooldown_timer",
+            "remaining": delay_seconds,
+            "total": delay_seconds,
+        })
+
+        try:
+            for remaining in range(delay_seconds, 0, -1):
+                if not self.session_manager.is_authenticated():
+                    logger.info("[Live Session] Session locked or closed during cooldown; aborting.")
+                    self.is_in_cooldown = False
+                    return
+
+                # Send periodic visual notifications so the user knows Victor is counting down
+                if remaining in (90, 60, 30, 15, 10, 5):
+                    await self.session_manager.websocket_send_callback({
+                        "type": "cooldown_timer",
+                        "remaining": remaining,
+                        "total": delay_seconds,
+                    })
+                    await self.session_manager.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "system",
+                        "text": f"⏳ Cooldown standby: Reconnecting in {remaining}s... (or type a command to retry now)",
+                    })
+                await asyncio.sleep(1)
+
+            self.is_in_cooldown = False
             await self.session_manager.websocket_send_callback({
                 "type": "transcript",
                 "role": "assistant",
-                "text": "⚠️ Gemini connection encountered an internal error. Attempting automatic reconnection...",
+                "text": "🔄 2-minute cooldown completed. Automatically reconnecting to Gemini Live, Sir...",
             })
 
-            # Attempt automatic reconnection if session is currently authenticated
-            if hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated():
-                asyncio.create_task(self._reconnect_after_error())
+            reconnected = await self.start()
+            if reconnected:
+                logger.info("[Live Session] Successfully auto-reconnected after 1011 cooldown!")
+                await self.session_manager.set_state(VictorState.ACTIVE)
+                await self.session_manager.websocket_send_callback({
+                    "type": "orb_state",
+                    "state": "LISTENING",
+                })
+                await self.session_manager.websocket_send_callback({
+                    "type": "cooldown_timer",
+                    "remaining": 0,
+                    "total": 0,
+                })
+                await self.session_manager.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": "Gemini Live connection restored, Sir. Ready for your commands.",
+                })
+            else:
+                logger.warning("[Live Session] Auto-reconnect after cooldown failed. Victor awaiting command.")
+                await self.session_manager.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": "Reconnection after cooldown was unsuccessful, Sir. Please type or speak a command to retry.",
+                })
+        except asyncio.CancelledError:
+            logger.info("[Live Session] Cooldown standby cancelled early (manual command or user action).")
+            self.is_in_cooldown = False
         finally:
-            self.is_connected = False
-            
+            self.is_in_cooldown = False
+
+    async def cancel_cooldown(self):
+        """Cancels an active cooldown timer and attempts immediate reconnection."""
+        if self.cooldown_task and not self.cooldown_task.done():
+            self.cooldown_task.cancel()
+        self.is_in_cooldown = False
+        await self.session_manager.websocket_send_callback({
+            "type": "cooldown_timer",
+            "remaining": 0,
+            "total": 0,
+        })
+        logger.info("[Live Session] Cooldown cancelled by user action; initiating immediate start().")
+        return await self.start()
+
     async def _reconnect_after_error(self, max_retries: int = 3):
         """Attempts graceful reconnection to Gemini Live after an unexpected socket disconnect."""
         logger.info("[Live Session] Starting auto-reconnect task...")
-        await self.close()
+        await self.close(clear_cooldown=False)
 
         for attempt in range(1, max_retries + 1):
             if not self.session_manager.is_authenticated():
@@ -315,22 +501,15 @@ class LiveSessionManager:
             except Exception as rec_err:
                 logger.warning(f"[Live Session] Reconnect attempt {attempt} failed: {rec_err}")
 
-        # All retries exhausted - remain in explicit ERROR state
-        logger.error("[Live Session] All reconnection attempts failed. Victor is in ERROR state.")
-        await self.session_manager.set_state(VictorState.ERROR)
-        await self.session_manager.websocket_send_callback({
-            "type": "orb_state",
-            "state": "ERROR",
-        })
-        await self.session_manager.websocket_send_callback({
-            "type": "transcript",
-            "role": "assistant",
-            "text": "Connection to Gemini Live could not be restored automatically. Please say or type a command to retry, Sir.",
-        })
+        # All rapid retries exhausted - enter cooldown standby rather than dying permanently
+        logger.error("[Live Session] Rapid reconnection attempts failed. Entering 2-minute cooldown standby.")
+        if self.cooldown_task and not self.cooldown_task.done():
+            self.cooldown_task.cancel()
+        self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=120))
 
     async def send_audio(self, pcm_chunk: bytes):
-        if not self.is_connected or not self.session:
-            return  # Drop silently while disconnected, avoids flooding 1011 logs
+        if not self.is_connected or not self.session or self.is_in_cooldown:
+            return  # Drop silently while disconnected or in cooldown, avoids flooding 1011 logs
 
         try:
             if hasattr(self.session, "send_realtime_input"):
@@ -347,8 +526,13 @@ class LiveSessionManager:
                 self.is_connected = False
 
     async def send_text(self, text: str):
-        """Sends user text turn to Gemini Live session."""
+        """Sends user text turn to Gemini Live session and evaluates memory worthiness."""
         self._turn_tool_counts = {}
+
+        # Evaluate typed text for persistent memory
+        if hasattr(self.session_manager, "memory"):
+            asyncio.create_task(self._process_turn_memory(text))
+
         if self.is_connected and self.session:
             try:
                 # Update visual state to THINKING
@@ -367,8 +551,13 @@ class LiveSessionManager:
         else:
             logger.warning(f"send_text dropped message (session not connected): '{text}'")
 
-    async def close(self):
+    async def close(self, clear_cooldown: bool = True):
         self.is_connected = False
+        if clear_cooldown:
+            if self.cooldown_task and not self.cooldown_task.done():
+                self.cooldown_task.cancel()
+            self.is_in_cooldown = False
+
         if self.receive_task:
             self.receive_task.cancel()
         if self.session and self._ctx:
@@ -378,3 +567,4 @@ class LiveSessionManager:
                 logger.error(f"Error closing Gemini session: {e}")
         self.session = None
         self._ctx = None
+

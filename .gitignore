@@ -15,6 +15,7 @@ ENV/
 # Environment & secrets
 .env
 config/secrets.yaml
+config/paired_phone.json
 VICTOR_2_0_GEMINI_LIVE_PROJECT_README.md
 Victor.bat
 

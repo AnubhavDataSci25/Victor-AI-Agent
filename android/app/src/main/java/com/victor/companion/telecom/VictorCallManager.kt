@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
@@ -81,12 +82,38 @@ class VictorCallManager(
             return false
         }
 
-        return try {
+        val uri = Uri.parse("tel:${Uri.encode(phoneNumber)}")
+
+        // Attempt 1: Using TelecomManager.placeCall (Android 6.0+ / API 23+)
+        // This is the preferred method on modern Android, avoiding background activity start restrictions.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
+            try {
+                telecomManager.placeCall(uri, Bundle())
+                return true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // Attempt 2: Direct ACTION_CALL Intent
+        try {
             val intent = Intent(Intent.ACTION_CALL).apply {
-                data = Uri.parse("tel:${Uri.encode(phoneNumber)}")
+                data = uri
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
+            return true
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Attempt 3: ACTION_DIAL Intent fallback
+        return try {
+            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                data = uri
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(dialIntent)
             true
         } catch (e: Exception) {
             e.printStackTrace()

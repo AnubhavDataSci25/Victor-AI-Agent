@@ -369,3 +369,83 @@ def test_local_retrieval_latency_benchmark(tmp_path):
 
     avg_ms = (elapsed / 20) * 1000
     assert avg_ms < 5.0, f"Average recall latency was {avg_ms:.2f}ms, expected < 5.0ms"
+
+
+# ---------------------------------------------------------------------------
+# 7. Multi-Category Profile Context & Session Persistence Tests
+# ---------------------------------------------------------------------------
+
+def test_multi_category_core_profile_context(tmp_path):
+    """Verify get_core_profile_context includes preferences, user facts, and projects."""
+    db_file = tmp_path / "multi_cat.db"
+    manager = MemoryManager(db_path=str(db_file))
+
+    manager.remember(key="preferred_ide", content="VS Code", category="preference")
+    manager.remember(key="home_city", content="Bengaluru", category="user_fact")
+    manager.remember(key="current_project", content="Victor 2.0 AI Agent", category="project")
+    manager.remember(key="rule_never", content="never expose secrets in logs", category="instruction")
+
+    context = manager.get_core_profile_context()
+    assert "Preferences:" in context
+    assert "preferred_ide: VS Code" in context
+    assert "User Facts:" in context
+    assert "home_city: Bengaluru" in context
+    assert "Projects:" in context
+    assert "current_project: Victor 2.0 AI Agent" in context
+    assert "Instructions:" in context
+    assert "rule_never: never expose secrets in logs" in context
+
+
+def test_pending_memory_confirmation_flow(tmp_path):
+    """Verify pending memory flow for user consent before persisting."""
+    db_file = tmp_path / "pending.db"
+    manager = MemoryManager(db_path=str(db_file))
+
+    # 1. Set pending candidate
+    manager.set_pending_memory(
+        key="vacation_destination",
+        content="Wants to visit Japan in autumn",
+        category="user_fact",
+        tags=["travel", "japan"]
+    )
+    assert manager.get_pending_memory() is not None
+    assert manager.store.count() == 0  # Not yet saved to SQLite
+
+    # 2. Confirm candidate
+    ok, msg = manager.confirm_pending_memory()
+    assert ok is True
+    assert manager.get_pending_memory() is None  # Pending cleared
+    assert manager.store.count() == 1  # Now committed to SQLite
+    rec = manager.store.get("vacation_destination")
+    assert rec is not None
+    assert "Japan" in rec.content
+
+    # 3. Reject / clear flow
+    manager.set_pending_memory(key="random_note", content="Temporary thought")
+    manager.clear_pending_memory()
+    assert manager.get_pending_memory() is None
+    assert manager.store.get("random_note") is None
+
+
+def test_persistence_after_session_clear(tmp_path):
+    """Verify long-term memory remains intact when session short-term turns are cleared."""
+    db_file = tmp_path / "session_clear.db"
+    manager = MemoryManager(db_path=str(db_file))
+
+    manager.remember(key="partner_name", content="Sarah", category="user_fact")
+    manager.session.add_turn("user", "Hello Victor")
+    manager.session.add_turn("assistant", "Hello Sir")
+
+    # Simulate session termination / lock
+    manager.session.clear()
+    assert len(manager.session.get_recent_turns(5)) == 0
+
+    # Verify SQLite store still has the memory intact
+    recalled = manager.store.get("partner_name")
+    assert recalled is not None
+    assert recalled.content == "Sarah"
+
+    # Verify context can still be generated for subsequent session
+    ctx = manager.get_core_profile_context()
+    assert "partner_name: Sarah" in ctx
+

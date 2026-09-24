@@ -96,15 +96,46 @@ async def test_memory_worthiness_evaluation(mock_jev):
     mem1 = await engine.evaluate_memory_worthiness("Remember that I prefer dark mode in all apps")
     assert mem1.is_worthy is True
     assert mem1.probability >= 0.90
+    assert mem1.priority == "high"
+    assert mem1.should_ask_user is False
     assert mem1.source == "deterministic"
 
-    # Jev-evaluated phrase
+    # Jev-evaluated phrase with medium priority requiring consent
     mock_jev.decide = AsyncMock(
         return_value=JevDecisionResponse(
-            answers={"worthy": JevAnswer(type="noul", noul=0.88)}
+            answers={
+                "worthy": JevAnswer(type="noul", noul=0.88),
+                "priority": JevAnswer(type="choice", choice="medium"),
+                "category": JevAnswer(type="choice", choice="preference"),
+                "ask_consent": JevAnswer(type="noul", noul=0.75),
+            }
         )
     )
-    mem2 = await engine.evaluate_memory_worthiness("I usually wake up at 6am every weekday")
+    mem2 = await engine.evaluate_memory_worthiness("I might start learning Rust next month")
     assert mem2.is_worthy is True
     assert mem2.probability == 0.88
+    assert mem2.priority == "medium"
+    assert mem2.should_ask_user is True
     assert mem2.source == "jev"
+
+
+@pytest.mark.asyncio
+async def test_memory_sanitizer_security_block(mock_jev):
+    """Verify passwords and API keys are blocked by decision memory evaluation."""
+    engine = DecisionEngine(jev_client=mock_jev)
+    mem = await engine.evaluate_memory_worthiness("Remember that my password is superSecret123")
+    assert mem.is_worthy is False
+    assert mem.priority == "low"
+    assert mem.source == "sanitizer"
+    assert "Security policy rejection" in mem.reasoning
+
+
+@pytest.mark.asyncio
+async def test_transient_action_not_worthy(mock_jev):
+    """Verify fleeting queries and tool commands are not saved to memory."""
+    engine = DecisionEngine(jev_client=mock_jev)
+    mem = await engine.evaluate_memory_worthiness("what is the time right now?")
+    assert mem.is_worthy is False
+    assert mem.priority == "low"
+    assert mem.source == "deterministic"
+

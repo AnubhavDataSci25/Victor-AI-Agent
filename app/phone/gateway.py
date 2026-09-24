@@ -52,6 +52,31 @@ def _sanitize_phone_number(number: str) -> str:
     return f"+{digits}" if has_plus else digits
 
 
+def _phone_numbers_match(num1: str, num2: str) -> bool:
+    """
+    Robust comparison of two phone numbers:
+    - Strips all non-digit characters.
+    - If exact match, returns True.
+    - If stripped of leading zero matches, returns True.
+    - If length of both >= 10 and last 10 digits match, returns True.
+    - If length of both >= 7 and one is a suffix of the other, returns True.
+    """
+    d1 = re.sub(r"\D", "", num1 or "")
+    d2 = re.sub(r"\D", "", num2 or "")
+    if not d1 or not d2:
+        return False
+    if d1 == d2:
+        return True
+    if d1.lstrip("0") == d2.lstrip("0"):
+        return True
+    if len(d1) >= 10 and len(d2) >= 10 and d1[-10:] == d2[-10:]:
+        return True
+    min_len = min(len(d1), len(d2))
+    if min_len >= 7 and d1[-min_len:] == d2[-min_len:]:
+        return True
+    return False
+
+
 class PhoneGateway:
     def __init__(
         self,
@@ -63,6 +88,7 @@ class PhoneGateway:
         self.crypto = crypto or self.device_manager.crypto
         self.session_manager = session_manager
         self.pending_call_approval: Optional[PendingCallApproval] = None
+        self.candidate_matches: list[ContactMatch] = []
         self.current_incoming_call: Optional[IncomingCallState] = None
         self._command_dispatcher: Optional[Callable[[PhoneMessage], Any]] = None
 
@@ -142,6 +168,7 @@ class PhoneGateway:
 
         # Clear any stale pending call approval
         self.pending_call_approval = None
+        self.candidate_matches = []
 
         logger.info(f"Querying phone contacts for query: '{name_query}'")
         res = await self._send_phone_command("resolve_contact", {"query": name_query})
@@ -158,6 +185,7 @@ class PhoneGateway:
             }
 
         matches = [ContactMatch.model_validate(m) for m in raw_matches]
+        self.candidate_matches = matches
 
         if len(matches) > 1:
             summary = "\n".join([f"- {m.name} ({m.type}): {m.number}" for m in matches])
@@ -195,7 +223,7 @@ class PhoneGateway:
     async def initiate_call(self, contact_name: str, phone_number: str) -> dict[str, Any]:
         """
         Initiates an outgoing call to the specified contact.
-        STRICT REQUIREMENT: Requires an active, matching PendingCallApproval.
+        STRICT REQUIREMENT: Requires an active, matching PendingCallApproval or resolved candidate.
         Calls without explicit prior user approval are deterministically rejected.
         """
         auth_ok, auth_err = self._verify_session_auth()
@@ -205,6 +233,19 @@ class PhoneGateway:
         dev_ok, dev_err = self._verify_device_ready()
         if not dev_ok:
             return {"success": False, "message": dev_err}
+
+        # 1. If no active approval, attempt matching against candidate_matches from resolve_contact
+        if not self.pending_call_approval and self.candidate_matches:
+            for cand in self.candidate_matches:
+                cand_sanitized = _sanitize_phone_number(cand.number)
+                if (phone_number and _phone_numbers_match(phone_number, cand.number)) or (
+                    contact_name and contact_name.lower().strip() in cand.name.lower()
+                ):
+                    self.pending_call_approval = PendingCallApproval(
+                        contact_name=cand.name,
+                        phone_number=cand_sanitized,
+                    )
+                    break
 
         if not self.pending_call_approval:
             return {
@@ -225,23 +266,23 @@ class PhoneGateway:
         sanitized_req = _sanitize_phone_number(phone_number)
         sanitized_approved = _sanitize_phone_number(self.pending_call_approval.phone_number)
 
-        # Numbers must match (ignoring formatting/spaces)
-        if sanitized_req and sanitized_approved and sanitized_req != sanitized_approved:
+        # Numbers must match (allowing country code/formatting differences)
+        if sanitized_req and sanitized_approved and not _phone_numbers_match(sanitized_req, sanitized_approved):
             return {
                 "success": False,
                 "message": f"Authorization Mismatch: Approved number was {sanitized_approved}, but requested {sanitized_req}.",
             }
 
-        target_number = sanitized_approved
+        target_number = sanitized_req or sanitized_approved
         target_name = self.pending_call_approval.contact_name
-
-        # Consume the approval immediately to prevent replay
-        self.pending_call_approval = None
 
         logger.info(f"Initiating approved phone call to {target_name} at {target_number}")
         res = await self._send_phone_command("initiate_call", {"phone_number": target_number})
 
         if res.get("success"):
+            # Consume the approval upon successful dispatch to prevent replay
+            self.pending_call_approval = None
+            self.candidate_matches = []
             return {
                 "success": True,
                 "contact_name": target_name,

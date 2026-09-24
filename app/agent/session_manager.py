@@ -349,6 +349,37 @@ class VictorSessionManager:
             "text": command_text,
         })
 
+        # Check for pending memory confirmation (User Consent Flow)
+        if hasattr(self, "memory") and self.memory.get_pending_memory():
+            cmd_lower = command_text.lower().strip().rstrip(".!")
+            affirmative_words = ("yes", "sure", "remember it", "save it", "please do", "yes please", "go ahead", "affirmative", "correct")
+            negative_words = ("no", "don't", "dont", "no need", "cancel", "never mind", "nevermind", "skip")
+
+            if any(cmd_lower == w or cmd_lower.startswith(w + " ") for w in affirmative_words):
+                pending_item = self.memory.get_pending_memory()
+                ok, note = self.memory.confirm_pending_memory()
+                if ok:
+                    confirm_text = f"Understood, Sir. I have committed '{pending_item['key']}' to your persistent long-term memory."
+                    await self.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": confirm_text,
+                    })
+                    return True
+            elif any(cmd_lower == w or cmd_lower.startswith(w + " ") for w in negative_words):
+                self.memory.clear_pending_memory()
+                await self.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": "Understood, Sir. I will not save that in memory.",
+                })
+                return True
+
+        # If live session is in 1011 cooldown, user typing a command cancels wait and reconnects immediately
+        if hasattr(self.live_session, "is_in_cooldown") and self.live_session.is_in_cooldown:
+            logger.info("User command received during 1011 cooldown; canceling standby and attempting immediate connection.")
+            await self.live_session.cancel_cooldown()
+
         # Submit text turn to Gemini Live
         if self.live_session.is_connected:
             await self.live_session.send_text(command_text)
@@ -364,6 +395,7 @@ class VictorSessionManager:
                     "text": "Gemini Live session is currently unavailable. Please try again in a moment, Sir.",
                 })
         return True
+
 
     async def lock(self):
         """

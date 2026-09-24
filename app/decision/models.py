@@ -65,4 +65,10 @@ class MemoryDecision(BaseModel):
     is_worthy: bool = False
     probability: float = 0.0
     category: str = "preference"
+    priority: str = "low"  # "high", "medium", "low"
+    suggested_key: str = ""
+    extracted_fact: str = ""
+    should_ask_user: bool = False
+    reasoning: str = ""
     source: str = "deterministic"
+

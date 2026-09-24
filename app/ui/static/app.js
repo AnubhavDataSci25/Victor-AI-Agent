@@ -918,7 +918,22 @@ ws.onmessage = (event) => {
             }
             updateUIState(message.state);
 
+        } else if (message.type === "cooldown_timer") {
+            const remaining = Number(message.remaining || 0);
+            if (remaining > 0) {
+                if (globalStatusText) globalStatusText.textContent = `COOLDOWN (${remaining}s)`;
+                if (orbStateText) orbStateText.textContent = `RETRY IN ${remaining}s`;
+            } else {
+                if (globalStatusText && globalStatusText.textContent.includes("COOLDOWN")) {
+                    globalStatusText.textContent = currentState || "ACTIVE";
+                }
+                if (orbStateText && orbStateText.textContent.includes("RETRY")) {
+                    orbStateText.textContent = currentState || "LISTENING";
+                }
+            }
+
         } else if (message.type === "transcript") {
+
             appendTranscriptEntry(message.role, message.text);
 
         } else if (message.type === "speak") {

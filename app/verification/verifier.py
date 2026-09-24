@@ -103,7 +103,7 @@ class ResultVerifier:
 
         # 4. Phone Companion Tools Verification
         if name_lower.startswith("phone_"):
-            if "error" in res_str.lower() or "not connected" in res_str.lower() or "failed" in res_str.lower():
+            if any(k in res_str.lower() for k in ("error", "not connected", "failed", "denied", "mismatch", "expired", "offline", "unpaired")):
                 return VerificationResult(
                     verified=False,
                     status=VerificationStatus.FAILED,

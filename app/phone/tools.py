@@ -73,6 +73,8 @@ class PhoneResolveContactTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         contact_name = args.get("contact_name", "")
         res = await self.gateway.resolve_contact(contact_name)
+        if not res.get("success"):
+            return f"Error: {res.get('message', 'Failed to resolve contact.')}"
         return res.get("message", "Contact lookup complete.")
 
 
@@ -106,6 +108,8 @@ class PhoneInitiateCallTool(BaseTool):
         contact_name = args.get("contact_name", "")
         phone_number = args.get("phone_number", "")
         res = await self.gateway.initiate_call(contact_name, phone_number)
+        if not res.get("success"):
+            return f"Error: {res.get('message', 'Phone failed to initiate the call.')}"
         return res.get("message", "Call initiation complete.")
 
 
@@ -126,6 +130,8 @@ class PhoneAnswerCallTool(BaseTool):
 
     async def execute(self, args: dict[str, Any]) -> str:
         res = await self.gateway.answer_call()
+        if not res.get("success"):
+            return f"Error: {res.get('message', 'Incoming call answer failed.')}"
         return res.get("message", "Incoming call answered.")
 
 
@@ -146,6 +152,8 @@ class PhoneRejectCallTool(BaseTool):
 
     async def execute(self, args: dict[str, Any]) -> str:
         res = await self.gateway.reject_call()
+        if not res.get("success"):
+            return f"Error: {res.get('message', 'Incoming call rejection failed.')}"
         return res.get("message", "Incoming call rejected.")
 
 

@@ -97,6 +97,14 @@ class PhoneServer:
         await websocket.accept()
         self.active_websocket = websocket
         logger.info("Android companion connected to /ws/phone")
+        if self.device_manager.paired_device:
+            self.device_manager.paired_device.status = PhoneStatus.ONLINE
+            self.device_manager.paired_device.last_seen = time.time()
+            await self._notify_ui({
+                "type": "phone_status",
+                "status": PhoneStatus.ONLINE.value,
+                "device_name": self.device_manager.paired_device.device_name,
+            })
 
         try:
             while True:
@@ -176,6 +184,10 @@ class PhoneServer:
                 if not self.crypto.verify_signature(msg, device.shared_secret_hex):
                     logger.warning(f"Signature mismatch on message {msg.id}")
                     continue
+
+                # Any valid message from the device confirms it is actively online
+                device.last_seen = time.time()
+                device.status = PhoneStatus.ONLINE
 
                 # 3. Message Routing
                 if msg.type == MessageType.HEARTBEAT:

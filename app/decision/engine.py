@@ -17,6 +17,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.memory.sanitizer import MemorySanitizer
 from app.decision.jev_client import JevClient
 from app.decision.models import (
     IntentDecision,
@@ -27,6 +28,7 @@ from app.decision.models import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # Fast-path keyword heuristics to avoid LLM calls on obvious commands
 FAST_PATH_RULES: List[Tuple[re.Pattern, str, List[str]]] = [
@@ -173,31 +175,247 @@ class DecisionEngine:
 
     async def evaluate_memory_worthiness(self, text: str) -> MemoryDecision:
         """
-        Evaluate whether a piece of user speech contains a durable preference or fact worth storing.
+        Evaluate whether a piece of user speech contains a durable preference, fact, or instruction worth storing.
+        Categorizes priority (high, medium, low) and determines whether user confirmation is required.
         """
         clean_text = (text or "").strip()
-        if len(clean_text) < 5:
-            return MemoryDecision(is_worthy=False, probability=0.0)
+        if len(clean_text) < 4:
+            return MemoryDecision(is_worthy=False, probability=0.0, priority="low")
 
-        # Deterministic keywords
-        if any(k in clean_text.lower() for k in ("remember that", "my preferred", "i prefer", "always use", "never use")):
-            return MemoryDecision(is_worthy=True, probability=0.95, source="deterministic")
-
-        if self.jev.is_available():
-            question = JevQuestion(
-                type=QuestionType.NOUL,
-                instructions="Does this user statement express a durable personal preference, enduring fact, or long-term instruction?",
+        # 1. Zero credential leaks: Never store sensitive credentials, keys, or passwords
+        is_sensitive, sec_reason = MemorySanitizer.is_sensitive(clean_text)
+        if is_sensitive:
+            logger.warning(f"Memory evaluation rejected sensitive content: {sec_reason}")
+            return MemoryDecision(
+                is_worthy=False,
+                probability=0.0,
+                priority="low",
+                reasoning=f"Security policy rejection: {sec_reason}",
+                source="sanitizer",
             )
+
+        lower_text = clean_text.lower()
+
+        # 2. Transient / fleeting action filter: Skip commands, system controls, quick questions, and news
+        transient_starters = (
+            "what is the time", "what's the time", "what time", "what is the date",
+            "open youtube", "open google", "open chrome", "close the tab", "close tab",
+            "search for", "how much is", "set volume", "mute", "unmute",
+            "show notifications", "what is my battery", "how much battery",
+            "get weather", "what's the weather", "current news", "get news",
+        )
+        if lower_text.startswith(transient_starters):
+            return MemoryDecision(
+                is_worthy=False,
+                probability=0.0,
+                priority="low",
+                reasoning="Transient query or momentary action.",
+                source="deterministic",
+            )
+
+        # 3. Explicit memory commands (Deterministic High-Priority)
+        m_remember = re.search(r"\b(?:remember\s+that|remember|keep\s+in\s+mind(?:\s+that)?|note\s+that)\s+(.+)$", clean_text, re.I)
+        if m_remember:
+            statement = m_remember.group(1).strip().rstrip(".")
+            words = re.findall(r"\w+", statement)
+            suggested_key = "_".join(words[:4]).lower() if words else "user_note"
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.98,
+                category="user_fact",
+                priority="high",
+                suggested_key=suggested_key,
+                extracted_fact=statement,
+                should_ask_user=False,
+                reasoning="Explicit user instruction to remember.",
+                source="deterministic",
+            )
+
+        m_pref = re.search(r"\bmy\s+preferred\s+([a-zA-Z0-9_\s]{2,25})\s+is\s+(.+)$", clean_text, re.I)
+        if m_pref:
+            thing = m_pref.group(1).strip().lower().replace(" ", "_")
+            val = m_pref.group(2).strip().rstrip(".")
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.96,
+                category="preference",
+                priority="high",
+                suggested_key=f"preferred_{thing}",
+                extracted_fact=f"Preferred {thing.replace('_', ' ')} is {val}",
+                should_ask_user=False,
+                reasoning="Explicit statement of user preference.",
+                source="deterministic",
+            )
+
+        m_fav = re.search(r"\bmy\s+favou?rite\s+([a-zA-Z0-9_\s]{2,25})\s+is\s+(.+)$", clean_text, re.I)
+        if m_fav:
+            thing = m_fav.group(1).strip().lower().replace(" ", "_")
+            val = m_fav.group(2).strip().rstrip(".")
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.95,
+                category="preference",
+                priority="high",
+                suggested_key=f"favorite_{thing}",
+                extracted_fact=f"Favorite {thing.replace('_', ' ')} is {val}",
+                should_ask_user=False,
+                reasoning="Explicit statement of favorite preference.",
+                source="deterministic",
+            )
+
+        m_rule = re.search(r"\bi\s+(always|never)\s+(use|want|prefer|like|allow)\s+(.+)$", clean_text, re.I)
+        if m_rule:
+            adv = m_rule.group(1).lower()
+            verb = m_rule.group(2).lower()
+            detail = m_rule.group(3).strip().rstrip(".")
+            words = re.findall(r"\w+", detail)
+            suggested_key = f"rule_{adv}_{words[0].lower()}" if words else f"rule_{adv}"
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.92,
+                category="instruction",
+                priority="high",
+                suggested_key=suggested_key,
+                extracted_fact=f"Always/Never rule: {adv} {verb} {detail}",
+                should_ask_user=False,
+                reasoning="Explicit behavioral constraint or preference.",
+                source="deterministic",
+            )
+
+        # 4. Jev Advisory Evaluation (when available)
+        if self.jev.is_available():
+            questions = {
+                "worthy": JevQuestion(
+                    type=QuestionType.NOUL,
+                    instructions="Does this user statement express a durable personal preference, enduring personal fact, family/identity detail, or long-term workflow instruction worth remembering across sessions?",
+                ),
+                "priority": JevQuestion(
+                    type=QuestionType.CHOICE,
+                    instructions="What is the priority level to preserve this in long-term memory?",
+                    options=["high", "medium", "low"],
+                ),
+                "category": JevQuestion(
+                    type=QuestionType.CHOICE,
+                    instructions="What category best describes this information?",
+                    options=["preference", "user_fact", "project", "instruction"],
+                ),
+                "ask_consent": JevQuestion(
+                    type=QuestionType.NOUL,
+                    instructions="Is this an implicit or personal detail where Victor should politely ask user confirmation ('Sir, should I remember that...?') before storing?",
+                ),
+            }
             resp = await self.jev.decide(
                 state=f"User stated: '{clean_text}'",
-                questions={"worthy": question},
+                questions=questions,
             )
             if resp and "worthy" in resp.answers:
                 prob = resp.answers["worthy"].noul or 0.0
+                is_worthy = prob >= 0.65
+
+                # Extract priority
+                priority = "medium"
+                if "priority" in resp.answers and resp.answers["priority"].choice:
+                    priority = resp.answers["priority"].choice.lower()
+                elif prob >= 0.85:
+                    priority = "high"
+                elif prob < 0.65:
+                    priority = "low"
+
+                # Extract category
+                category = "preference"
+                if "category" in resp.answers and resp.answers["category"].choice:
+                    category = resp.answers["category"].choice.lower()
+
+                # Extract user consent requirement
+                ask_prob = 0.0
+                if "ask_consent" in resp.answers:
+                    ask_prob = resp.answers["ask_consent"].noul or 0.0
+                should_ask = is_worthy and (ask_prob >= 0.60 or priority == "medium")
+
+                # Build suggested key from keywords
+                words = [w for w in re.findall(r"\w+", lower_text) if w not in ("i", "my", "the", "a", "an", "is", "am", "in", "to")]
+                suggested_key = "_".join(words[:4]) if words else "user_fact"
+
                 return MemoryDecision(
-                    is_worthy=prob >= 0.70,
+                    is_worthy=is_worthy,
                     probability=prob,
+                    category=category,
+                    priority=priority,
+                    suggested_key=suggested_key,
+                    extracted_fact=clean_text,
+                    should_ask_user=should_ask,
+                    reasoning=f"Jev evaluated worthiness (prob: {prob:.2f}, priority: {priority}).",
                     source="jev",
                 )
 
-        return MemoryDecision(is_worthy=False, probability=0.0, source="deterministic_fallback")
+        # 5. Deterministic Heuristic Fallback (when Jev is offline or for offline testing)
+        # Enduring personal facts (family, residence, identity) -> High priority user_fact
+        m_residence = re.search(r"\b(?:i\s+live\s+in|my\s+home\s+(?:city|town)\s+is|i\s+reside\s+in)\s+([a-zA-Z\s]{2,40})", clean_text, re.I)
+        if m_residence:
+            place = m_residence.group(1).strip().rstrip(".")
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.90,
+                category="user_fact",
+                priority="high",
+                suggested_key="home_location",
+                extracted_fact=f"Lives in {place}",
+                should_ask_user=False,
+                reasoning="Core personal residence fact.",
+                source="heuristic",
+            )
+
+        m_kin = re.search(r"\bmy\s+(wife|husband|partner|girlfriend|boyfriend|son|daughter|mother|father|brother|sister)\s+(?:is|is\s+named|named)\s+([a-zA-Z\s]{2,30})", clean_text, re.I)
+        if m_kin:
+            relation = m_kin.group(1).lower()
+            name = m_kin.group(2).strip().rstrip(".")
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.92,
+                category="user_fact",
+                priority="high",
+                suggested_key=f"family_{relation}",
+                extracted_fact=f"{relation.capitalize()} is {name}",
+                should_ask_user=False,
+                reasoning="User family / personal relationship fact.",
+                source="heuristic",
+            )
+
+        # Active projects or pursuits -> Medium priority project, ask user consent
+        m_proj = re.search(r"\b(?:i\s+am\s+(?:working\s+on|building|developing)|my\s+current\s+project\s+is)\s+([a-zA-Z0-9_\-\s]{2,50})", clean_text, re.I)
+        if m_proj:
+            proj = m_proj.group(1).strip().rstrip(".")
+            words = re.findall(r"\w+", proj)
+            key = f"project_{words[0].lower()}" if words else "current_project"
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.82,
+                category="project",
+                priority="medium",
+                suggested_key=key,
+                extracted_fact=f"Working on {proj}",
+                should_ask_user=True,
+                reasoning="Active user project context; confirmation recommended.",
+                source="heuristic",
+            )
+
+        # General preferences ("I like/love/prefer...") -> Medium priority preference, ask user consent
+        m_like = re.search(r"\bi\s+(?:really\s+)?(?:prefer|like|love)\s+([a-zA-Z0-9_\-\s]{2,40})", clean_text, re.I)
+        if m_like:
+            fav = m_like.group(1).strip().rstrip(".")
+            words = re.findall(r"\w+", fav)
+            key = f"pref_{words[0].lower()}" if words else "user_preference"
+            return MemoryDecision(
+                is_worthy=True,
+                probability=0.75,
+                category="preference",
+                priority="medium",
+                suggested_key=key,
+                extracted_fact=f"Prefers {fav}",
+                should_ask_user=True,
+                reasoning="General preference detected; confirmation recommended.",
+                source="heuristic",
+            )
+
+        return MemoryDecision(is_worthy=False, probability=0.0, priority="low", source="deterministic_fallback")
+
