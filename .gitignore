@@ -16,6 +16,7 @@ ENV/
 .env
 config/secrets.yaml
 config/paired_phone.json
+config/reminders.db*
 VICTOR_2_0_GEMINI_LIVE_PROJECT_README.md
 Victor.bat
 

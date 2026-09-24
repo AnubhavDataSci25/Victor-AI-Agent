@@ -33,6 +33,18 @@ _STATIC_DIR = _PROJECT_ROOT / "app" / "ui" / "static"
 
 app = FastAPI(title="Victor 2.0 API")
 
+from app.reminders.scheduler import get_global_reminder_scheduler
+
+@app.on_event("startup")
+async def startup_event():
+    scheduler = get_global_reminder_scheduler()
+    await scheduler.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    scheduler = get_global_reminder_scheduler()
+    await scheduler.stop()
+
 @app.middleware("http")
 async def add_cache_control_headers(request, call_next):
     response = await call_next(request)
@@ -74,6 +86,29 @@ async def websocket_endpoint(websocket: WebSocket):
     # Connect phone server with active browser session
     phone_server.set_ui_notify_callback(ws_send)
     phone_server.gateway.set_session_manager(session_manager)
+
+    # Connect persistent reminder scheduler with active browser session
+    reminder_scheduler = get_global_reminder_scheduler()
+    reminder_scheduler.set_session_auth_checker(session_manager.is_authenticated)
+
+    async def dispatch_reminder(payload: dict):
+        try:
+            await ws_send(payload)
+            if session_manager.is_authenticated():
+                await ws_send({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": payload.get("message", ""),
+                })
+                await ws_send({
+                    "type": "speak",
+                    "text": payload.get("message", ""),
+                })
+        except Exception:
+            pass
+
+    reminder_scheduler.set_notification_dispatcher(dispatch_reminder)
+    await reminder_scheduler.start()
 
     await ws_send({
         "type": "session_state",

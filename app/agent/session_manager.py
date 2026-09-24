@@ -375,6 +375,54 @@ class VictorSessionManager:
                 })
                 return True
 
+        # Check for natural response to a recently delivered proactive reminder
+        try:
+            from app.reminders.scheduler import get_global_reminder_scheduler
+            reminder_sched = getattr(self, "reminder_scheduler", None) or get_global_reminder_scheduler()
+            last_rem = reminder_sched.get_last_delivered_reminder()
+            if last_rem:
+                cmd_lower = command_text.lower().strip().rstrip(".!")
+                completion_phrases = (
+                    "completed", "done", "yes done", "yes it is done", "yes it's done",
+                    "it is done", "it's done", "i completed it", "i finished it", "mark as completed",
+                    "mark it completed", "mark completed", "task done", "finished"
+                )
+                pending_phrases = (
+                    "no not yet", "not yet", "not done yet", "no not done yet",
+                    "still pending", "haven't done it", "haven't finished", "in progress"
+                )
+
+                if any(cmd_lower == p or cmd_lower.startswith(p + " ") for p in completion_phrases):
+                    reminder_sched.store.complete_reminder(last_rem.id)
+                    reminder_sched.notify_store_updated()
+                    reminder_sched.clear_last_delivered_context()
+                    confirm_msg = f"Understood, Sir. Marked '{last_rem.work_task}' as completed and stopped future notifications."
+                    await self.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": confirm_msg,
+                    })
+                    await self.websocket_send_callback({
+                        "type": "speak",
+                        "text": confirm_msg,
+                    })
+                    return True
+                elif any(cmd_lower == p or cmd_lower.startswith(p + " ") for p in pending_phrases):
+                    reminder_sched.clear_last_delivered_context()
+                    ack_msg = f"Understood, Sir. Keeping '{last_rem.work_task}' pending. I will remind you again according to schedule."
+                    await self.websocket_send_callback({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": ack_msg,
+                    })
+                    await self.websocket_send_callback({
+                        "type": "speak",
+                        "text": ack_msg,
+                    })
+                    return True
+        except Exception as rem_err:
+            logger.debug(f"Reminder conversational check error: {rem_err}")
+
         # If live session is in 1011 cooldown, user typing a command cancels wait and reconnects immediately
         if hasattr(self.live_session, "is_in_cooldown") and self.live_session.is_in_cooldown:
             logger.info("User command received during 1011 cooldown; canceling standby and attempting immediate connection.")

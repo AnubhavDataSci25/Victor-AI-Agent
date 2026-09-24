@@ -36,6 +36,7 @@ DESTRUCTIVE_TOOL_NAMES = {
     "file_explorer_delete",
     "phone_unpair",
     "memory_forget",
+    "reminder_delete",
 }
 
 # Tools that produce real-world external side-effects

@@ -1005,6 +1005,8 @@ ws.onmessage = (event) => {
 
         } else if (message.type === "phone_alert") {
             console.log(`[Victor Phone Alert] ${message.source}: ${message.text}`);
+        } else if (message.type === "reminder_notification") {
+            console.log(`[Victor Reminder] ${message.message}`);
         }
     } catch (e) {
         console.error("Error parsing WebSocket message:", e);

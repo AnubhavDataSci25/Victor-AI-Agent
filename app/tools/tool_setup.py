@@ -319,6 +319,26 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     except Exception as e:
         logger.warning(f"Public API tools unavailable: {e}")
 
+    # --- Real-Time Date & Reminder Tools ---
+    try:
+        from app.tools.reminders.tool import (
+            ReminderCompleteTool,
+            ReminderCreateTool,
+            ReminderDeleteTool,
+            ReminderListTool,
+            ReminderPostponeTool,
+            ReminderUpdateTool,
+        )
+        registry.register(ReminderCreateTool())
+        registry.register(ReminderListTool())
+        registry.register(ReminderCompleteTool())
+        registry.register(ReminderPostponeTool())
+        registry.register(ReminderUpdateTool())
+        registry.register(ReminderDeleteTool())
+        logger.info("Registered Real-Time Date & Reminder tools.")
+    except Exception as e:
+        logger.warning(f"Reminder tools unavailable: {e}")
+
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")
     return registry

@@ -169,6 +169,12 @@ class LiveSessionManager:
                         "When an incoming call is announced ('Sir, ABC is calling'), call phone_answer_call if the user commands to pick up, or phone_reject_call if the user commands to reject or decline. "
                         "To open YouTube or search for videos on the phone, use phone_launch_youtube. "
                         "To unpair or revoke the phone, use phone_unpair. "
+                        "For persistent date & reminder management: "
+                        "When the user asks to remember a task deadline, meeting, commitment, birthday, or anniversary, use reminder_create with the task description, date, and optional time. "
+                        "To list upcoming, today's, or overdue tasks, use reminder_list. "
+                        "When the user reports a task is finished or completed, use reminder_complete. "
+                        "When a deadline changes or is extended, use reminder_postpone or reminder_update. "
+                        "To delete or cancel a task, use reminder_delete. "
                         "The user can terminate the session by asking: 'lock yourself'."
                     )
                 )]
