@@ -414,7 +414,18 @@
 
         setState(stateName) {
             const normalized = this.normalizeState(stateName);
-            if (this.state.current === "error" && normalized !== "error") return;
+
+            // Allow definitive session-level transitions to recover from error state.
+            // Only block transient mid-task states from prematurely clearing an active error.
+            if (this.state.current === "error" && normalized !== "error") {
+                const recoveryStates = ["listening", "idle", "locked", "offline", "authentication", "wake"];
+                if (!recoveryStates.includes(normalized)) return;
+                // Clear any pending error auto-recovery timer since we're explicitly recovering
+                if (this.state.errorTimer !== null) {
+                    clearTimeout(this.state.errorTimer);
+                    this.state.errorTimer = null;
+                }
+            }
 
             if (normalized === "error") {
                 this.triggerError();
