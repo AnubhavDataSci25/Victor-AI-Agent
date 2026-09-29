@@ -23,20 +23,27 @@ def get_gemini_tools() -> list[types.Tool]:
     for tool_name, tool_instance in registry.get_all_tools().items():
         if isinstance(tool_instance, BaseTool):
             schema = tool_instance.get_schema()
+            params = schema.get("parameters")
+            # If no parameters or no properties defined, set parameters=None for schema hygiene
+            if not params or not params.get("properties"):
+                params = None
             func_decl = types.FunctionDeclaration(
                 name=schema["name"],
                 description=schema["description"],
-                parameters=schema.get("parameters", {}),
+                parameters=params,
             )
         elif isinstance(tool_instance, Tool):
             # Build JSON schema from Pydantic model
             json_schema = tool_instance.args_model.model_json_schema()
-            # Strip Pydantic metadata keys that Gemini doesn't expect
-            params = {
-                "type": "object",
-                "properties": json_schema.get("properties", {}),
-                "required": json_schema.get("required", []),
-            }
+            props = json_schema.get("properties", {})
+            if not props:
+                params = None
+            else:
+                params = {
+                    "type": "object",
+                    "properties": props,
+                    "required": json_schema.get("required", []),
+                }
             func_decl = types.FunctionDeclaration(
                 name=tool_instance.name,
                 description=tool_instance.description,

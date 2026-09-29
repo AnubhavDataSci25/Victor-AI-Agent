@@ -312,6 +312,10 @@ class VictorSessionManager:
         if self._is_speaking:
             return
 
+        # Suppress mic audio forwarding when live session is actively executing a tool
+        if hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False):
+            return
+
         # Strictly stream only when session is ACTIVE; ignore during BIOMETRIC_PENDING or locks
         if self.state != VictorState.ACTIVE:
             return

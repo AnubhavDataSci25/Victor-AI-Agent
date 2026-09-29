@@ -27,6 +27,9 @@ class LiveSessionManager:
         self.decision_engine = None
         self.is_in_cooldown: bool = False
         self.cooldown_task: Optional[asyncio.Task] = None
+        self._is_executing_tools: bool = False
+        self.resumption_handle: Optional[str] = None
+        self.cooldown_delay_seconds: int = int(os.getenv("GEMINI_1011_COOLDOWN", "120"))
         
         # Instantiate Tool Dispatcher
         self.tool_dispatcher = LiveToolDispatcher(self.session_manager)
@@ -110,6 +113,12 @@ class LiveSessionManager:
                 )
             ),
             tools=gemini_tools,
+            context_window_compression=types.ContextWindowCompressionConfig(
+                sliding_window=types.SlidingWindow(),
+            ),
+            session_resumption=types.SessionResumptionConfig(
+                handle=self.resumption_handle
+            ),
             system_instruction=types.Content(
                 parts=[types.Part.from_text(
                     text=(
@@ -198,14 +207,53 @@ class LiveSessionManager:
             return True
         except Exception as e:
             logger.error(f"Failed to connect to Gemini Live: {e}")
+            if self.resumption_handle:
+                logger.info("[Live Session] Resumed connection failed; falling back to fresh session...")
+                self.resumption_handle = None
+                config.session_resumption = types.SessionResumptionConfig(handle=None)
+                try:
+                    self._ctx = self.client.aio.live.connect(model=self.model, config=config)
+                    self.session = await self._ctx.__aenter__()
+                    self.is_connected = True
+                    logger.info(f"Gemini Live connection established fresh with model '{self.model}'.")
+                    self.receive_task = asyncio.create_task(self._receive_loop())
+                    return True
+                except Exception as fresh_err:
+                    logger.error(f"Fresh connection retry also failed: {fresh_err}")
             return False
 
     async def _receive_loop(self):
         try:
             while self.is_connected and self.session:
-                received_in_turn = False
                 async for response in self.session.receive():
                     received_in_turn = True
+
+                    # 1. Update session resumption handle from server
+                    resumption_update = getattr(response, "session_resumption_update", None)
+                    if isinstance(resumption_update, types.LiveServerSessionResumptionUpdate) or ("is_mock_resumption" in getattr(resumption_update, "__dict__", {})):
+                        if getattr(resumption_update, "resumable", False):
+                            new_handle = getattr(resumption_update, "new_handle", None)
+                            if new_handle:
+                                self.resumption_handle = new_handle
+                                logger.debug(f"[Live Session] Stored new resumption handle: {new_handle[:20]}...")
+
+                    # 2. Handle proactive GoAway signal before connection ends (~10 min mark)
+                    go_away = getattr(response, "go_away", None)
+                    if isinstance(go_away, types.LiveServerGoAway) or ("is_mock_go_away" in getattr(go_away, "__dict__", {})):
+                        time_left = getattr(go_away, "time_left", "soon")
+                        logger.warning(
+                            f"[Live Session] Server sent GoAway signal (time left: {time_left}). "
+                            "Triggering proactive session resumption..."
+                        )
+                        asyncio.create_task(self._proactive_reconnect_goaway())
+                        continue
+
+                    # 3. Handle Tool Call Cancellation if model aborted
+                    cancellation = getattr(response, "tool_call_cancellation", None)
+                    if isinstance(cancellation, types.LiveServerToolCallCancellation) or ("is_mock_cancellation" in getattr(cancellation, "__dict__", {})):
+                        logger.warning(f"[Live Session] Server cancelled tool calls: {getattr(cancellation, 'ids', [])}")
+                        self._is_executing_tools = False
+
                     server_content = getattr(response, "server_content", None)
                     if server_content is not None:
                         # Handle interruption signal from Gemini
@@ -274,75 +322,81 @@ class LiveSessionManager:
                     # Handle Tool Calls
                     tool_call = getattr(response, "tool_call", None)
                     if tool_call and getattr(tool_call, "function_calls", None):
-                        # Signal EXECUTING state
-                        await self.session_manager.set_state(VictorState.EXECUTING)
-                        await self.session_manager.websocket_send_callback({
-                            "type": "orb_state",
-                            "state": "EXECUTING"
-                        })
-                        
-                        function_responses = []
-                        now = time.time()
-                        # Prune recorded tool calls older than 15 seconds
-                        self._recent_tool_calls = [
-                            (name, ts) for name, ts in self._recent_tool_calls
-                            if (now - ts) < 15.0
-                        ]
-
-                        for fc in tool_call.function_calls:
-                            # Rolling window circuit breaker: prevent rapid tool execution loops
-                            recent_count = sum(1 for name, _ in self._recent_tool_calls if name == fc.name) + 1
-                            self._recent_tool_calls.append((fc.name, now))
-
-                            turn_count = self._turn_tool_counts.get(fc.name, 0) + 1
-                            self._turn_tool_counts[fc.name] = turn_count
-
-                            if recent_count > 3 or turn_count > 3:
-                                logger.warning(
-                                    f"[Live Session] Tool call loop circuit breaker triggered for '{fc.name}' "
-                                    f"({recent_count} calls within 15s window, {turn_count} in single turn)."
-                                )
-                                f_resp = types.FunctionResponse(
-                                    name=fc.name,
-                                    id=getattr(fc, "id", None),
-                                    response={
-                                        "result": (
-                                            f"Execution loop prevented: Tool '{fc.name}' was called {recent_count} times in rapid succession. "
-                                            "Do NOT retry this tool. Inform the user that the operation failed or cannot be completed at this time, "
-                                            "and ask for clarification or wait for their next command."
-                                        ),
-                                        "status": "failed",
-                                    },
-                                )
-                                function_responses.append(f_resp)
-                                await self.session_manager.websocket_send_callback({
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": f"⚠️ Loop prevented: Repeated requests to '{fc.name}' stopped.",
-                                })
-                                continue
-
+                        # Suppress audio streaming immediately to avoid 1011 race condition
+                        self._is_executing_tools = True
+                        try:
+                            # Signal EXECUTING state
+                            await self.session_manager.set_state(VictorState.EXECUTING)
                             await self.session_manager.websocket_send_callback({
-                                "type": "tool_execution",
-                                "tool": fc.name,
-                                "status": "running"
+                                "type": "orb_state",
+                                "state": "EXECUTING"
                             })
-                            f_resp = await self.tool_dispatcher.handle_function_call(fc)
-                            function_responses.append(f_resp)
                             
-                        if hasattr(self.session, "send_tool_response"):
-                            await self.session.send_tool_response(function_responses=function_responses)
-                        else:
-                            await self.session.send(input=types.LiveClientToolResponse(
-                                function_responses=function_responses
-                            ))
-                        
-                        # After sending responses back, the model will reason/speak
-                        await self.session_manager.websocket_send_callback({
-                            "type": "orb_state",
-                            "state": "THINKING"
-                        })
-                        await self.session_manager.set_state(VictorState.ACTIVE)
+                            function_responses = []
+                            now = time.time()
+                            # Prune recorded tool calls older than 15 seconds
+                            self._recent_tool_calls = [
+                                (name, ts) for name, ts in self._recent_tool_calls
+                                if (now - ts) < 15.0
+                            ]
+
+                            for fc in tool_call.function_calls:
+                                # Rolling window circuit breaker: prevent rapid tool execution loops
+                                recent_count = sum(1 for name, _ in self._recent_tool_calls if name == fc.name) + 1
+                                self._recent_tool_calls.append((fc.name, now))
+
+                                turn_count = self._turn_tool_counts.get(fc.name, 0) + 1
+                                self._turn_tool_counts[fc.name] = turn_count
+
+                                if recent_count > 3 or turn_count > 3:
+                                    logger.warning(
+                                        f"[Live Session] Tool call loop circuit breaker triggered for '{fc.name}' "
+                                        f"({recent_count} calls within 15s window, {turn_count} in single turn)."
+                                    )
+                                    f_resp = types.FunctionResponse(
+                                        name=fc.name,
+                                        id=getattr(fc, "id", None),
+                                        response={
+                                            "result": (
+                                                f"Execution loop prevented: Tool '{fc.name}' was called {recent_count} times in rapid succession. "
+                                                "Do NOT retry this tool. Inform the user that the operation failed or cannot be completed at this time, "
+                                                "and ask for clarification or wait for their next command."
+                                            ),
+                                            "status": "failed",
+                                        },
+                                    )
+                                    function_responses.append(f_resp)
+                                    await self.session_manager.websocket_send_callback({
+                                        "type": "transcript",
+                                        "role": "assistant",
+                                        "text": f"⚠️ Loop prevented: Repeated requests to '{fc.name}' stopped.",
+                                    })
+                                    continue
+
+                                await self.session_manager.websocket_send_callback({
+                                    "type": "tool_execution",
+                                    "tool": fc.name,
+                                    "status": "running"
+                                })
+                                f_resp = await self.tool_dispatcher.handle_function_call(fc)
+                                function_responses.append(f_resp)
+                                
+                            if hasattr(self.session, "send_tool_response"):
+                                await self.session.send_tool_response(function_responses=function_responses)
+                            else:
+                                await self.session.send(input=types.LiveClientToolResponse(
+                                    function_responses=function_responses
+                                ))
+                            
+                            # After sending responses back, the model will reason/speak
+                            await self.session_manager.websocket_send_callback({
+                                "type": "orb_state",
+                                "state": "THINKING"
+                            })
+                            await self.session_manager.set_state(VictorState.ACTIVE)
+                        finally:
+                            # Safely unblock audio streaming only after tool responses are dispatched
+                            self._is_executing_tools = False
 
                 if not received_in_turn and self.is_connected:
                     # Prevent tight loop if receive() returns immediately without yielding
@@ -365,11 +419,12 @@ class LiveSessionManager:
 
             if hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated():
                 if is_1011:
-                    logger.warning(f"[Live Session] Gemini Live 1011 Internal Error encountered. Entering 2-minute cooldown standby.")
+                    delay = self.cooldown_delay_seconds
+                    logger.warning(f"[Live Session] Gemini Live 1011 Internal Error encountered. Entering {delay}s cooldown standby.")
                     self.is_in_cooldown = True
                     if self.cooldown_task and not self.cooldown_task.done():
                         self.cooldown_task.cancel()
-                    self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=120))
+                    self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=delay))
                 else:
                     await self.session_manager.websocket_send_callback({
                         "type": "transcript",
@@ -379,12 +434,16 @@ class LiveSessionManager:
                     asyncio.create_task(self._reconnect_after_error())
         finally:
             self.is_connected = False
+            self._is_executing_tools = False
 
-    async def _standby_and_restart(self, delay_seconds: int = 120):
+    async def _standby_and_restart(self, delay_seconds: Optional[int] = None):
         """
-        Enters a 2-minute cooling standby when error 1011 / internal error occurs.
+        Enters a cooling standby when error 1011 / internal error occurs.
         Periodically updates the UI and automatically reconnects without requiring a page refresh.
         """
+        if delay_seconds is None:
+            delay_seconds = self.cooldown_delay_seconds
+
         self.is_in_cooldown = True
         logger.info(f"[Live Session] Entering {delay_seconds}s cooldown standby due to error 1011...")
         await self.close(clear_cooldown=False)
@@ -393,7 +452,7 @@ class LiveSessionManager:
             "type": "transcript",
             "role": "assistant",
             "text": (
-                "⚠️ Gemini Live encountered an internal error (1011). Entering 2-minute cooldown standby. "
+                f"⚠️ Gemini Live encountered an internal error (1011). Entering {delay_seconds}s cooldown standby. "
                 "Victor will automatically reconnect without refreshing the page."
             ),
         })
@@ -508,14 +567,34 @@ class LiveSessionManager:
                 logger.warning(f"[Live Session] Reconnect attempt {attempt} failed: {rec_err}")
 
         # All rapid retries exhausted - enter cooldown standby rather than dying permanently
-        logger.error("[Live Session] Rapid reconnection attempts failed. Entering 2-minute cooldown standby.")
+        logger.error("[Live Session] Rapid reconnection attempts failed. Entering cooldown standby.")
         if self.cooldown_task and not self.cooldown_task.done():
             self.cooldown_task.cancel()
-        self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=120))
+        self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=self.cooldown_delay_seconds))
+
+    async def _proactive_reconnect_goaway(self):
+        """
+        Handles proactive server GoAway notifications before connection terminates,
+        reconnecting seamlessly using session resumption.
+        """
+        logger.info("[Live Session] Performing proactive session resumption on GoAway signal...")
+        await asyncio.sleep(0.2)
+        await self.close(clear_cooldown=False)
+        reconnected = await self.start()
+        if reconnected:
+            logger.info("[Live Session] Proactive session resumption successful!")
+            await self.session_manager.set_state(VictorState.ACTIVE)
+            await self.session_manager.websocket_send_callback({
+                "type": "orb_state",
+                "state": "LISTENING"
+            })
+        else:
+            logger.warning("[Live Session] Proactive resumption failed; starting auto-reconnect.")
+            asyncio.create_task(self._reconnect_after_error())
 
     async def send_audio(self, pcm_chunk: bytes):
-        if not self.is_connected or not self.session or self.is_in_cooldown:
-            return  # Drop silently while disconnected or in cooldown, avoids flooding 1011 logs
+        if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
+            return  # Drop silently while disconnected, in cooldown, or during tool execution to avoid 1011 race conditions
 
         try:
             if hasattr(self.session, "send_realtime_input"):
@@ -559,6 +638,7 @@ class LiveSessionManager:
 
     async def close(self, clear_cooldown: bool = True):
         self.is_connected = False
+        self._is_executing_tools = False
         if clear_cooldown:
             if self.cooldown_task and not self.cooldown_task.done():
                 self.cooldown_task.cancel()

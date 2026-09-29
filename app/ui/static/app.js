@@ -118,14 +118,36 @@ async function startAudioPipeline() {
 
         // Capture Processor for streaming to backend
         scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+        let silentFramesCount = 0;
+        const SILENCE_THRESHOLD = 0.005;
+
         scriptProcessor.onaudioprocess = (e) => {
-            // Only stream during active conversation session
+            // Only stream during active conversation session; drop during tool execution or thinking
             if (currentState !== "ACTIVE" && currentState !== "LISTENING" && currentState !== "SPEAKING") return;
+            if (currentState === "EXECUTING" || currentState === "THINKING") return;
 
             // Acoustic echo suppression: drop mic packets while Victor's pre-auth SpeechSynthesis is speaking
             if (isVictorSpeaking) return;
 
             const inputData = e.inputBuffer.getChannelData(0);
+
+            // Silence gating to avoid 1011 keepalive ping timeouts and context window exhaustion
+            let sumSq = 0;
+            for (let i = 0; i < inputData.length; i++) {
+                sumSq += inputData[i] * inputData[i];
+            }
+            const rms = Math.sqrt(sumSq / inputData.length);
+
+            if (rms < SILENCE_THRESHOLD) {
+                silentFramesCount++;
+                // Allow up to 3 silent frames (~750ms) to ensure turn endings are captured, then gate
+                if (silentFramesCount > 3) {
+                    return;
+                }
+            } else {
+                silentFramesCount = 0;
+            }
+
             const pcm16 = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
                 let s = Math.max(-1, Math.min(1, inputData[i]));

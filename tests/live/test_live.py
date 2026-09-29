@@ -354,4 +354,104 @@ async def test_live_session_tool_call_loop_circuit_breaker():
     assert len(loop_warnings) >= 1
 
 
+@pytest.mark.asyncio
+async def test_audio_suppressed_during_tool_execution():
+    """Verify audio chunks are dropped when live session is executing a tool to prevent 1011 race conditions."""
+    mock_session_manager = MagicMock()
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager._is_executing_tools = True
+    manager.session = MagicMock()
+    manager.session.send_realtime_input = AsyncMock()
+
+    await manager.send_audio(b"\x00\x01\x02\x03")
+    assert manager.session.send_realtime_input.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_session_manager_audio_suppressed_during_tool_execution():
+    """Verify session_manager drops microphone audio while live session is executing tools."""
+    from app.agent.session_manager import VictorSessionManager
+    sm = VictorSessionManager(websocket_send_callback=AsyncMock())
+    sm.state = VictorState.ACTIVE
+    sm.live_session = MagicMock()
+    sm.live_session._is_executing_tools = True
+    sm.live_session.send_audio = AsyncMock()
+
+    await sm.handle_audio_input(b"\x00\x01\x02\x03")
+    assert sm.live_session.send_audio.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_gateway_timeout_prevents_websocket_1011():
+    """Verify ToolGateway enforces execution timeout and returns a failed status rather than hanging."""
+    import asyncio
+    from app.gateway.tool_gateway import ToolGateway
+
+    gateway = ToolGateway()
+    fc = MagicMock()
+    fc.name = "hanging_tool"
+    fc.args = {}
+    fc.id = "hang-1"
+
+    # Mock execute to simulate a slow tool that takes longer than timeout
+    async def mock_slow_execute(*args, **kwargs):
+        await asyncio.sleep(0.5)
+
+    gateway.execute = mock_slow_execute
+
+    # Set timeout_seconds to 0.05s
+    res = await gateway.execute_function_call(fc, timeout_seconds=0.05)
+    assert res.name == "hanging_tool"
+    assert res.id == "hang-1"
+    assert res.response["status"] == "failed"
+    assert "timed out" in res.response["error"]
+
+
+@pytest.mark.asyncio
+async def test_session_resumption_update_stores_handle():
+    """Verify session_resumption_update messages store the resumption handle for reconnects."""
+    mock_session_manager = MagicMock()
+    mock_session_manager.state = VictorState.ACTIVE
+    mock_session_manager.set_state = AsyncMock()
+    mock_session_manager.websocket_send_callback = AsyncMock()
+
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager.session = MagicMock()
+
+    # Simulate message with session_resumption_update
+    update_mock = MagicMock()
+    update_mock.resumable = True
+    update_mock.new_handle = "gemini-handle-xyz-789"
+    update_mock.is_mock_resumption = True
+
+    mock_resp = MagicMock()
+    mock_resp.session_resumption_update = update_mock
+    mock_resp.server_content = None
+    mock_resp.tool_call = None
+
+    async def mock_receive_gen():
+        yield mock_resp
+        manager.is_connected = False
+
+    manager.session.receive = mock_receive_gen
+    await manager._receive_loop()
+
+    assert manager.resumption_handle == "gemini-handle-xyz-789"
+
+
+def test_schema_hygiene_parameters_none_for_parameterless_tools():
+    """Verify tools with no parameters pass parameters=None instead of empty dict."""
+    from app.tools.schemas import get_gemini_tools
+    tools = get_gemini_tools()
+    decls = tools[0].function_declarations
+    for d in decls:
+        # If parameters exists, it should not have empty properties
+        if d.parameters is not None:
+            props = getattr(d.parameters, "properties", None)
+            assert props is not None and len(props) > 0, f"Tool {d.name} has parameters without properties"
+
+
+
 

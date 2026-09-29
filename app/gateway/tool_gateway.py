@@ -336,8 +336,9 @@ class ToolGateway:
         self,
         function_call: Any,
         session_manager: Optional[Any] = None,
+        timeout_seconds: float = 8.0,
     ) -> types.FunctionResponse:
-        """Adapter for Gemini Live function calls."""
+        """Adapter for Gemini Live function calls with execution timeout and bounded responses."""
         tool_name = function_call.name
         args = function_call.args if hasattr(function_call, "args") and function_call.args else {}
         call_id = getattr(function_call, "id", None)
@@ -348,18 +349,42 @@ class ToolGateway:
             call_id=call_id,
         )
 
-        gateway_res = await self.execute(request, session_manager=session_manager)
+        try:
+            gateway_res = await asyncio.wait_for(
+                self.execute(request, session_manager=session_manager),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"[Tool Gateway] Tool '{tool_name}' timed out after {timeout_seconds}s.")
+            return types.FunctionResponse(
+                name=tool_name,
+                id=call_id,
+                response={
+                    "result": f"Execution timed out: Tool '{tool_name}' did not complete within {timeout_seconds} seconds. Please inform the user and ask how to proceed.",
+                    "error": f"Tool '{tool_name}' timed out after {timeout_seconds}s",
+                    "status": "failed",
+                },
+            )
 
         # Handle privileged lifecycle action 'lock_victor'
         if gateway_res.success and tool_name == "lock_victor" and session_manager is not None:
             logger.info("[Tool Gateway] Privileged lifecycle action: 'lock_victor' invoked.")
             asyncio.create_task(self._delayed_lock(session_manager))
 
+        # Sanitize and truncate result payload to prevent oversized messages triggering 1011
+        result_payload = gateway_res.result
+        if isinstance(result_payload, bytes):
+            result_payload = f"<binary data: {len(result_payload)} bytes>"
+        elif not isinstance(result_payload, (str, dict, list, int, float, bool, type(None))):
+            result_payload = str(result_payload)
+        if isinstance(result_payload, str) and len(result_payload) > 8000:
+            result_payload = result_payload[:8000] + "... [truncated for speech brevity]"
+
         if gateway_res.success:
             return types.FunctionResponse(
                 name=tool_name,
                 id=call_id,
-                response={"result": gateway_res.result, "status": "success", "trace_id": gateway_res.trace_id},
+                response={"result": result_payload, "status": "success", "trace_id": gateway_res.trace_id},
             )
 
         if gateway_res.requires_confirmation:
