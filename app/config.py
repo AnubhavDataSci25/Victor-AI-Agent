@@ -119,6 +119,16 @@ class DecisionConfig(BaseModel):
     enabled: bool = True
 
 
+class VisionConfig(BaseModel):
+    """Camera & Visual Intelligence settings."""
+    camera_index: int = 0
+    vision_model: str = Field(default_factory=lambda: os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash"))
+    live_sample_interval_seconds: float = 4.0
+    auto_save_media: bool = False
+    pictures_dir: str = Field(default_factory=lambda: str(Path.home() / "Pictures" / "Victor_Captures"))
+    videos_dir: str = Field(default_factory=lambda: str(Path.home() / "Videos" / "Victor_Captures"))
+
+
 class VictorConfig(BaseModel):
     """Top-level configuration for Victor 2.0."""
     host: str = "0.0.0.0"
@@ -133,6 +143,7 @@ class VictorConfig(BaseModel):
     coding: CodingConfig = Field(default_factory=CodingConfig)
     multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
+    vision: VisionConfig = Field(default_factory=lambda: VisionConfig())
     api_tools: Any = None  # Populated with ApiToolsConfig
 
     def __init__(self, **data: Any) -> None:

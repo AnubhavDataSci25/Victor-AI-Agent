@@ -990,7 +990,16 @@ ws.onmessage = (event) => {
             }
 
         } else if (message.type === "tool_execution") {
-            appendTranscriptEntry("tool", `🔧 Executing tool: ${message.tool} (${message.status})`);
+            const toolName = message.tool || "tool";
+            const status = (message.status || "").toLowerCase();
+            if (status === "failed") {
+                const errMsg = message.error ? `: ${message.error}` : "";
+                appendTranscriptEntry("tool", `⚠️ Tool '${toolName}' failed${errMsg}`);
+            } else if (status === "completed") {
+                appendTranscriptEntry("tool", `✅ Tool '${toolName}' completed.`);
+            } else {
+                appendTranscriptEntry("tool", `🔧 Executing tool: ${toolName}...`);
+            }
 
         } else if (message.type === "audio_interrupted") {
             console.log("[Victor Audio] User speech interruption detected.");
@@ -1029,6 +1038,21 @@ ws.onmessage = (event) => {
             console.log(`[Victor Phone Alert] ${message.source}: ${message.text}`);
         } else if (message.type === "reminder_notification") {
             console.log(`[Victor Reminder] ${message.message}`);
+        } else if (message.type === "camera_state") {
+            console.log(`[Victor Camera] Hardware State: ${message.state}`);
+            if (message.state === "OPEN") {
+                appendTranscriptEntry("system", "📷 Camera initialized and active.");
+            } else if (message.state === "ANALYZING") {
+                appendTranscriptEntry("system", "🔍 Live visual analysis active.");
+            } else if (message.state === "RECORDING") {
+                appendTranscriptEntry("system", "🎥 Camera video recording in progress...");
+            } else if (message.state === "CLOSED") {
+                appendTranscriptEntry("system", "📷 Camera closed and hardware released.");
+            }
+        } else if (message.type === "camera_analysis_update") {
+            if (message.text) {
+                appendTranscriptEntry("assistant", `👁️ Visual Analysis: ${message.text}`);
+            }
         }
     } catch (e) {
         console.error("Error parsing WebSocket message:", e);

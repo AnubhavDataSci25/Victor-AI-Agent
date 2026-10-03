@@ -51,6 +51,10 @@ FAST_PATH_RULES: List[Tuple[re.Pattern, str, List[str]]] = [
     (re.compile(r"\b(calendar|schedule event)\b", re.I), "google_services", ["google_calendar_create_event"]),
     (re.compile(r"\b(call\s+[A-Za-z]+|dial)\b", re.I), "phone_companion", ["phone_resolve_contact", "phone_initiate_call"]),
     (re.compile(r"\b(remind|reminder|reminders|deadline|due date|task.*due|upcoming tasks?|my tasks?|birthday|anniversary)\b", re.I), "reminder_management", ["reminder_create", "reminder_list", "reminder_complete", "reminder_postpone", "reminder_update", "reminder_delete"]),
+    (re.compile(r"\b(open camera|turn on camera|activate camera|close camera|turn off camera|stop camera|take a photo|take a picture|capture photo|capture this|record a video|what am i doing|analyze.*front|live visual analysis|start camera analysis|stop camera analysis)\b", re.I), "camera_vision", ["camera_open", "camera_close", "camera_capture", "camera_record_video", "camera_analyze", "camera_live_analysis"]),
+    (re.compile(r"\b(scan\s*(qr|barcode|code)|qr\s*code|read\s*qr|detect\s*qr|barcode)\b", re.I), "camera_vision", ["visual_scan_code"]),
+    (re.compile(r"\b(copy\s*(this\s*)?(text|image|qr|content)|copy.*from.*image|extract\s*text|paste\s*(it|copied|text|image)?)\b", re.I), "visual_clipboard", ["visual_copy", "visual_paste"]),
+    (re.compile(r"\b(lowest price|best price|compare prices?|price comparison|cheapest price|buy online|research price|find price|best deal on|where to buy)\b", re.I), "browser_research", ["browser_research"]),
 ]
 
 
@@ -94,6 +98,9 @@ class DecisionEngine:
                     "phone_companion": "Phone calls, SMS/WhatsApp notifications, mobile YouTube",
                     "reminder_management": "Managing task deadlines, scheduling reminders, recurring birthdays/anniversaries, completing or postponing tasks",
                     "memory_recall": "Remembering or recalling user personal preferences and project facts",
+                    "camera_vision": "Camera controls, photo/video capture, live camera analysis, QR/barcode scanning",
+                    "visual_clipboard": "Visual copy-paste, OCR text extraction from images or camera, copying/pasting images",
+                    "browser_research": "In-depth web research, shopping price discovery, lowest price finding across multiple retailers, hardware variant comparison",
                     "general_conversation": "Conversational dialogue, general knowledge, greetings",
                 },
             )

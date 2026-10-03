@@ -72,6 +72,75 @@ async def test_jev_client_success_parsing():
 
 
 @pytest.mark.asyncio
+async def test_jev_client_openrouter_choices_parsing():
+    import json
+    config = DecisionConfig(
+        openrouter_api_key="sk-or-test-key",
+        openrouter_base_url="https://openrouter.ai/api/v1",
+        jev_model="~typesafe/jev-latest",
+        enabled=True,
+    )
+    client = JevClient(config)
+    assert client.is_available() is True
+
+    choices_content = json.dumps({
+        "answers": {
+            "intent": {
+                "type": "choice",
+                "choice": "music_control",
+                "confidence": 0.98,
+            },
+            "worthy": {
+                "type": "noul",
+                "noul": 0.85,
+            }
+        }
+    })
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "gen-12345",
+        "model": "~typesafe/jev-latest",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": choices_content,
+                }
+            }
+        ],
+    }
+
+    with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        questions = {
+            "intent": JevQuestion(type=QuestionType.CHOICE, instructions="Domain"),
+            "worthy": JevQuestion(type=QuestionType.NOUL, instructions="Is it worthy?"),
+        }
+
+        resp = await client.decide("Play Daru Badnaam", questions)
+        assert resp is not None
+        assert "intent" in resp.answers
+        assert resp.answers["intent"].choice == "music_control"
+        assert resp.answers["intent"].confidence == 0.98
+        assert "worthy" in resp.answers
+        assert resp.answers["worthy"].noul == 0.85
+
+        # Verify outgoing payload contained messages for OpenRouter compliance
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        sent_json = kwargs["json"]
+        assert "messages" in sent_json
+        assert len(sent_json["messages"]) == 2
+        assert sent_json["messages"][0]["role"] == "system"
+        assert sent_json["messages"][1]["role"] == "user"
+
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_jev_client_timeout_fallback():
     config = DecisionConfig(
         openrouter_api_key="sk-or-test-key",

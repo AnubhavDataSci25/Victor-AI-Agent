@@ -11,6 +11,7 @@ Implements non-autoregressive "System One" decision requests with:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -62,12 +63,45 @@ class JevClient:
             return None
 
         endpoint = f"{self.config.openrouter_base_url.rstrip('/')}/chat/completions"
+
+        # Build schema instructions and structured input for OpenRouter /chat/completions
+        system_instruction = (
+            "You are a high-speed, precise decision engine for Victor AI Assistant. "
+            "Analyze the given state and answer each question. "
+            "You MUST respond ONLY with a valid JSON object matching this schema:\n"
+            "{\n"
+            '  "answers": {\n'
+            '    "<question_id>": {\n'
+            '      "type": "choice" | "noul" | "score",\n'
+            '      "choice": "<selected option string if type is choice>",\n'
+            '      "confidence": <float between 0.0 and 1.0>,\n'
+            '      "noul": <float probability between 0.0 and 1.0 for yes/true if type is noul>,\n'
+            '      "score": <float value if type is score>\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "Do not include markdown code fences or conversational text. Output pure JSON."
+        )
+
+        questions_payload = {
+            qid: q.model_dump(exclude_none=True) for qid, q in questions.items()
+        }
+        user_content = json.dumps({
+            "state": state,
+            "questions": questions_payload,
+        }, indent=2)
+
         payload: Dict[str, Any] = {
             "model": self.config.jev_model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_content},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.1,
+            # Retain top-level fields for direct Jev endpoints if applicable
             "state": state,
-            "questions": {
-                qid: q.model_dump(exclude_none=True) for qid, q in questions.items()
-            },
+            "questions": questions_payload,
         }
 
         start_time = time.monotonic()
@@ -84,9 +118,28 @@ class JevClient:
             data = resp.json()
             latency_ms = round((time.monotonic() - start_time) * 1000, 2)
 
-            answers_dict: Dict[str, JevAnswer] = {}
             raw_answers = data.get("answers", {})
 
+            # Support standard OpenAI / OpenRouter choices[0].message.content response format
+            if not raw_answers and "choices" in data and data["choices"]:
+                msg_content = data["choices"][0].get("message", {}).get("content", "")
+                if isinstance(msg_content, str) and msg_content.strip():
+                    try:
+                        clean_content = msg_content.strip()
+                        if clean_content.startswith("```"):
+                            lines = clean_content.splitlines()
+                            if lines and lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].startswith("```"):
+                                lines = lines[:-1]
+                            clean_content = "\n".join(lines).strip()
+                        parsed_content = json.loads(clean_content)
+                        if isinstance(parsed_content, dict):
+                            raw_answers = parsed_content.get("answers", parsed_content)
+                    except Exception as parse_err:
+                        logger.debug(f"[JevClient] Failed to parse choices message content as JSON: {parse_err}")
+
+            answers_dict: Dict[str, JevAnswer] = {}
             for qid, ans in raw_answers.items():
                 if isinstance(ans, dict):
                     answers_dict[qid] = JevAnswer(

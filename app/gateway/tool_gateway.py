@@ -88,7 +88,7 @@ class ToolGateway:
         if name_lower in EXTERNAL_SIDE_EFFECT_TOOLS or any(k in name_lower for k in ("move", "rename", "call", "schedule")):
             return RiskLevel.EXTERNAL_SIDE_EFFECT
 
-        if any(k in name_lower for k in ("create", "write", "adjust", "open_url", "launch")):
+        if any(k in name_lower for k in ("create", "write", "adjust", "open_url", "launch", "record")):
             return RiskLevel.LOW_RISK
 
         return RiskLevel.READ_ONLY
@@ -332,16 +332,35 @@ class ToolGateway:
             trace_id=trace.trace_id,
         )
 
+    def get_tool_timeout(self, tool_name: str) -> float:
+        """Determine appropriate execution timeout for a tool based on its characteristics."""
+        tool = self.registry.get(tool_name)
+        if tool and hasattr(tool, "timeout_seconds") and tool.timeout_seconds:
+            return float(tool.timeout_seconds)
+
+        name_lower = tool_name.lower()
+        if any(k in name_lower for k in ("multi_agent", "coding_execute", "test")):
+            return 60.0
+        elif any(k in name_lower for k in ("research", "coding", "code", "run_command", "shell")):
+            return 45.0
+        elif any(k in name_lower for k in ("music", "browser", "vision", "camera", "web", "scrape", "search")):
+            return 30.0
+        elif any(k in name_lower for k in ("phone", "contacts", "sms", "whatsapp", "call")):
+            return 20.0
+        return 15.0
+
     async def execute_function_call(
         self,
         function_call: Any,
         session_manager: Optional[Any] = None,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: Optional[float] = None,
     ) -> types.FunctionResponse:
         """Adapter for Gemini Live function calls with execution timeout and bounded responses."""
         tool_name = function_call.name
         args = function_call.args if hasattr(function_call, "args") and function_call.args else {}
         call_id = getattr(function_call, "id", None)
+
+        effective_timeout = timeout_seconds if timeout_seconds is not None else self.get_tool_timeout(tool_name)
 
         request = GatewayRequest(
             tool_name=tool_name,
@@ -352,16 +371,20 @@ class ToolGateway:
         try:
             gateway_res = await asyncio.wait_for(
                 self.execute(request, session_manager=session_manager),
-                timeout=timeout_seconds,
+                timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
-            logger.error(f"[Tool Gateway] Tool '{tool_name}' timed out after {timeout_seconds}s.")
+            logger.error(f"[Tool Gateway] Tool '{tool_name}' timed out after {effective_timeout}s.")
             return types.FunctionResponse(
                 name=tool_name,
                 id=call_id,
                 response={
-                    "result": f"Execution timed out: Tool '{tool_name}' did not complete within {timeout_seconds} seconds. Please inform the user and ask how to proceed.",
-                    "error": f"Tool '{tool_name}' timed out after {timeout_seconds}s",
+                    "result": (
+                        f"Execution timed out: Tool '{tool_name}' did not complete within {effective_timeout} seconds. "
+                        "Do NOT retry this tool call immediately. "
+                        f"Verbally explain to the user that {tool_name} timed out, and ask how they would like to proceed."
+                    ),
+                    "error": f"Tool '{tool_name}' timed out after {effective_timeout}s",
                     "status": "failed",
                 },
             )

@@ -453,5 +453,78 @@ def test_schema_hygiene_parameters_none_for_parameterless_tools():
             assert props is not None and len(props) > 0, f"Tool {d.name} has parameters without properties"
 
 
+@pytest.mark.asyncio
+async def test_live_session_proactive_speech_fallback_after_tool_timeout():
+    """Verify that if a tool times out and the model ends the turn without speaking, Victor speaks proactive fallback."""
+    mock_session_manager = MagicMock()
+    mock_session_manager.state = VictorState.ACTIVE
+    mock_session_manager.set_state = AsyncMock()
+    mock_session_manager.websocket_send_callback = AsyncMock()
+
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager.session = MagicMock()
+    manager.session.send_tool_response = AsyncMock()
+
+    # Tool execution returns timeout error
+    manager.tool_dispatcher.handle_function_call = AsyncMock(
+        return_value=types.FunctionResponse(
+            name="music_play",
+            id="call-music-1",
+            response={"status": "failed", "error": "Tool 'music_play' timed out after 30.0s"},
+        )
+    )
+
+    fc = MagicMock()
+    fc.name = "music_play"
+    fc.args = {"query": "Daru Badnaam"}
+    fc.id = "call-music-1"
+
+    tool_call = MagicMock()
+    tool_call.function_calls = [fc]
+
+    # Msg 1: Tool call
+    resp_tool_call = MagicMock()
+    resp_tool_call.server_content = None
+    resp_tool_call.tool_call = tool_call
+
+    # Msg 2: Server content with turn_complete=True, but NO audio and NO output transcription
+    server_content = MagicMock()
+    server_content.turn_complete = True
+    server_content.model_turn = None
+    server_content.input_transcription = None
+    server_content.output_transcription = None
+
+    resp_turn_complete = MagicMock()
+    resp_turn_complete.server_content = server_content
+    resp_turn_complete.tool_call = None
+
+    async def mock_receive_gen():
+        yield resp_tool_call
+        yield resp_turn_complete
+        manager.is_connected = False
+
+    manager.session.receive = mock_receive_gen
+    await manager._receive_loop()
+
+    # Check WebSocket messages sent
+    sent_msgs = [call.args[0] for call in mock_session_manager.websocket_send_callback.await_args_list]
+    msg_types = [m.get("type") for m in sent_msgs]
+
+    # Must contain "speak" so TTS verbally informs user
+    assert "speak" in msg_types
+    speak_msgs = [m for m in sent_msgs if m.get("type") == "speak"]
+    assert any("timed out" in m.get("text", "") or "encountered an issue" in m.get("text", "") for m in speak_msgs)
+
+    # Must contain "transcript" informing user in chat/terminal
+    transcript_msgs = [m for m in sent_msgs if m.get("type") == "transcript" and m.get("role") == "assistant"]
+    assert any("failed" in m.get("text", "") or "timed out" in m.get("text", "") for m in transcript_msgs)
+
+    # Must safely transition orb to LISTENING without getting stuck
+    orb_msgs = [m for m in sent_msgs if m.get("type") == "orb_state"]
+    assert orb_msgs[-1]["state"] == "LISTENING"
+
+
+
 
 

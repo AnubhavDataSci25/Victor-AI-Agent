@@ -36,6 +36,8 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         registry.register(BrowserOpenTabTool())
         registry.register(BrowserCloseTabTool())
         registry.register(BrowserCloseTool())
+        from app.tools.browser.research import BrowserResearchTool
+        registry.register(BrowserResearchTool())
         logger.info("Registered browser tools.")
     except Exception as e:
         logger.warning(f"Browser tools unavailable: {e}")
@@ -71,6 +73,32 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         logger.info("Registered screen understanding tools.")
     except Exception as e:
         logger.warning(f"Screen understanding tools unavailable: {e}")
+
+    # --- Camera & Visual Intelligence Tools ---
+    try:
+        from app.tools.vision.tools import (
+            CameraAnalyzeTool,
+            CameraCaptureTool,
+            CameraCloseTool,
+            CameraLiveAnalysisTool,
+            CameraOpenTool,
+            CameraRecordVideoTool,
+            VisualCopyTool,
+            VisualPasteTool,
+            VisualScanCodeTool,
+        )
+        registry.register(CameraOpenTool())
+        registry.register(CameraCloseTool())
+        registry.register(CameraCaptureTool())
+        registry.register(CameraRecordVideoTool())
+        registry.register(CameraAnalyzeTool())
+        registry.register(CameraLiveAnalysisTool())
+        registry.register(VisualScanCodeTool())
+        registry.register(VisualCopyTool())
+        registry.register(VisualPasteTool())
+        logger.info("Registered Camera & Visual Intelligence tools.")
+    except Exception as e:
+        logger.warning(f"Camera & Visual Intelligence tools unavailable: {e}")
 
     # --- Memory Tools ---
     try:

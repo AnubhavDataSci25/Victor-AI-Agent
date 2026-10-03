@@ -80,6 +80,15 @@ class VictorSessionManager:
         self._is_speaking = False
         self._pending_first_command: Optional[str] = None
 
+        # Camera & Live Visual Analyzer UI Callbacks
+        try:
+            from app.tools.vision.camera_driver import get_camera_driver
+            from app.tools.vision.live_analyzer import get_live_camera_analyzer
+            get_camera_driver().set_ui_callback(self.websocket_send_callback)
+            get_live_camera_analyzer().set_update_callback(self.websocket_send_callback)
+        except Exception as e:
+            logger.debug(f"Failed to set camera UI callbacks: {e}")
+
     def is_authenticated(self) -> bool:
         """
         True ONLY if both PIN and Windows Hello biometric authentication
@@ -467,5 +476,18 @@ class VictorSessionManager:
 
         browser_driver = PlaywrightBrowserDriver()
         await browser_driver.stop()
+
+        # Stop camera and live visual analyzer on lock to protect privacy
+        try:
+            from app.tools.vision.camera_driver import get_camera_driver
+            from app.tools.vision.live_analyzer import get_live_camera_analyzer
+            live_analyzer = get_live_camera_analyzer()
+            if live_analyzer.is_running:
+                await live_analyzer.stop()
+            camera_driver = get_camera_driver()
+            if camera_driver.is_open:
+                await camera_driver.close_camera()
+        except Exception as cam_err:
+            logger.debug(f"Error releasing camera on lock: {cam_err}")
 
         await self.set_state(VictorState.CLOSED)

@@ -2,6 +2,7 @@
 Unit tests for Victor's Central Tool Gateway (Phase 1).
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from google.genai import types
 import pytest
@@ -144,3 +145,33 @@ async def test_gateway_gemini_function_call_adapter(gateway, mock_session):
     assert f_resp.id == "call_abc123"
     assert f_resp.response.get("status") == "success"
     assert f_resp.response.get("result") == "Safe output"
+
+
+def test_gateway_dynamic_tool_timeout(gateway):
+    """Verify tool timeouts adapt based on tool attributes and categories."""
+    assert gateway.get_tool_timeout("music_play") == 30.0
+    assert gateway.get_tool_timeout("browser_open") == 30.0
+    assert gateway.get_tool_timeout("coding_execute_task") == 60.0
+    assert gateway.get_tool_timeout("unknown_fast_tool") == 15.0
+
+
+@pytest.mark.asyncio
+async def test_gateway_function_call_timeout_returns_instruction(gateway, mock_session):
+    """Verify timed out function calls return failed status and prompt Gemini not to retry blindly."""
+    fc = MagicMock()
+    fc.name = "slow_hanging_tool"
+    fc.args = {}
+    fc.id = "call_timeout_99"
+
+    async def mock_slow_execute(*args, **kwargs):
+        await asyncio.sleep(0.3)
+
+    gateway.execute = mock_slow_execute
+
+    f_resp = await gateway.execute_function_call(fc, session_manager=mock_session, timeout_seconds=0.05)
+    assert isinstance(f_resp, types.FunctionResponse)
+    assert f_resp.name == "slow_hanging_tool"
+    assert f_resp.response.get("status") == "failed"
+    assert "timed out" in f_resp.response.get("error", "")
+    assert "Do NOT retry this tool call immediately" in f_resp.response.get("result", "")
+

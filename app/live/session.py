@@ -24,6 +24,10 @@ class LiveSessionManager:
         self._ctx = None
         self._turn_tool_counts: dict[str, int] = {}
         self._recent_tool_calls: list[tuple[str, float]] = []
+        self._failed_tools_in_turn: set[str] = set()
+        self._had_tool_execution: bool = False
+        self._turn_has_spoken: bool = False
+        self._last_tool_error_msg: Optional[str] = None
         self.decision_engine = None
         self.is_in_cooldown: bool = False
         self.cooldown_task: Optional[asyncio.Task] = None
@@ -184,6 +188,17 @@ class LiveSessionManager:
                         "When the user reports a task is finished or completed, use reminder_complete. "
                         "When a deadline changes or is extended, use reminder_postpone or reminder_update. "
                         "To delete or cancel a task, use reminder_delete. "
+                        "For Camera & Visual Intelligence: "
+                        "Camera access is strictly user-initiated. "
+                        "When the user asks to open or activate the camera, use camera_open; to close or stop it, use camera_close. "
+                        "To capture a photo or snapshot, use camera_capture (set save=true only when user asks to save). "
+                        "To record a video clip, use camera_record_video (save=true only if asked). "
+                        "When the user asks 'What am I doing?', 'Analyze what is in front of me', 'What does this image contain?', or 'What is this?', use camera_analyze. "
+                        "For periodic continuous monitoring, use camera_live_analysis with action='start' or 'stop'. "
+                        "When asked to scan a QR code or barcode (from camera, screen, or file), use visual_scan_code. "
+                        "If a valid URL is detected in a QR/barcode or image, report the URL and domain to the user, and ask for confirmation before opening it in the browser with browser_open_url; never open suspicious or malformed links. "
+                        "For visual copy and paste, use visual_copy (mode='text' for OCR text extraction to Windows clipboard, mode='image' to copy the visual image to clipboard, source='camera'/'screen'/'image_path'/'qr_content'). "
+                        "When the user says 'paste the copied text' or 'paste the image', use visual_paste. "
                         "The user can terminate the session by asking: 'lock yourself'."
                     )
                 )]
@@ -276,6 +291,7 @@ class LiveSessionManager:
                             })
                             for part in getattr(model_turn, "parts", []):
                                 if getattr(part, "inline_data", None):
+                                    self._turn_has_spoken = True
                                     b64_audio = base64.b64encode(part.inline_data.data).decode('utf-8')
                                     await self.session_manager.websocket_send_callback({
                                         "type": "audio_output",
@@ -302,6 +318,7 @@ class LiveSessionManager:
                         # Handle assistant live output transcription
                         output_tx = getattr(server_content, "output_transcription", None)
                         if output_tx and getattr(output_tx, "text", None):
+                            self._turn_has_spoken = True
                             await self.session_manager.websocket_send_callback({
                                 "type": "transcript",
                                 "role": "assistant",
@@ -313,7 +330,31 @@ class LiveSessionManager:
                         # When model finishes speaking its turn, go to LISTENING
                         # (not IDLE — IDLE would stop the orb reactivity)
                         if getattr(server_content, "turn_complete", False):
+                            # Proactive voice fallback: if tools executed but Gemini Live emitted no audio or speech
+                            if self._had_tool_execution and not self._turn_has_spoken:
+                                fallback_msg = self._last_tool_error_msg or "Sir, the requested operation has finished."
+                                logger.warning(
+                                    f"[Live Session] Turn ended without model response after tool execution. Speaking fallback: '{fallback_msg}'"
+                                )
+                                await self.session_manager.websocket_send_callback({
+                                    "type": "transcript",
+                                    "role": "assistant",
+                                    "text": fallback_msg,
+                                })
+                                await self.session_manager.websocket_send_callback({
+                                    "type": "speak",
+                                    "text": fallback_msg,
+                                })
+                                if hasattr(self.session_manager, "memory"):
+                                    self.session_manager.memory.session.add_turn("assistant", fallback_msg)
+
+                            # Reset turn-level execution and speech trackers
                             self._turn_tool_counts = {}
+                            self._failed_tools_in_turn = set()
+                            self._had_tool_execution = False
+                            self._turn_has_spoken = False
+                            self._last_tool_error_msg = None
+
                             await self.session_manager.websocket_send_callback({
                                 "type": "orb_state",
                                 "state": "LISTENING"
@@ -324,6 +365,7 @@ class LiveSessionManager:
                     if tool_call and getattr(tool_call, "function_calls", None):
                         # Suppress audio streaming immediately to avoid 1011 race condition
                         self._is_executing_tools = True
+                        self._had_tool_execution = True
                         try:
                             # Signal EXECUTING state
                             await self.session_manager.set_state(VictorState.EXECUTING)
@@ -380,6 +422,33 @@ class LiveSessionManager:
                                 })
                                 f_resp = await self.tool_dispatcher.handle_function_call(fc)
                                 function_responses.append(f_resp)
+
+                                # Inspect tool execution response to notify UI and record failures
+                                resp_dict = getattr(f_resp, "response", {})
+                                if isinstance(resp_dict, dict):
+                                    err_detail = resp_dict.get("error")
+                                    is_failure = (resp_dict.get("status") == "failed") or bool(err_detail)
+                                    if is_failure:
+                                        self._failed_tools_in_turn.add(fc.name)
+                                        clean_err = str(err_detail or resp_dict.get("result", "Operation failed"))
+                                        self._last_tool_error_msg = f"Sir, {fc.name} encountered an issue: {clean_err}."
+                                        await self.session_manager.websocket_send_callback({
+                                            "type": "tool_execution",
+                                            "tool": fc.name,
+                                            "status": "failed",
+                                            "error": clean_err,
+                                        })
+                                        await self.session_manager.websocket_send_callback({
+                                            "type": "transcript",
+                                            "role": "assistant",
+                                            "text": f"⚠️ {fc.name} failed: {clean_err}",
+                                        })
+                                    else:
+                                        await self.session_manager.websocket_send_callback({
+                                            "type": "tool_execution",
+                                            "tool": fc.name,
+                                            "status": "completed",
+                                        })
                                 
                             if hasattr(self.session, "send_tool_response"):
                                 await self.session.send_tool_response(function_responses=function_responses)

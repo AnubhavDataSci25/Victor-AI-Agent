@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 class MusicPlayTool(BaseTool):
     name = "music_play"
+    timeout_seconds: float = 30.0
     description = "Searches for and plays music tracks, artists, or albums."
     parameters = {
         "type": "object",

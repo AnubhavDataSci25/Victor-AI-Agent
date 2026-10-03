@@ -61,6 +61,9 @@ class YouTubeMusicProvider:
             logger.info(f"YouTube Music: successfully started playback for '{query}'")
             return f"Playing '{query}' on YouTube Music."
 
+        except asyncio.CancelledError:
+            logger.warning(f"YouTube Music: playback request for '{query}' was cancelled or timed out.")
+            raise
         except Exception as e:
             logger.error(f"YouTube Music playback error: {e}")
             return f"Could not start playback on YouTube Music. Error: {str(e)}"
@@ -68,27 +71,25 @@ class YouTubeMusicProvider:
     @staticmethod
     async def _dismiss_cookie_banner(page) -> None:
         """Dismiss any cookie consent overlay that might block interaction."""
-        for sel in YouTubeMusicProvider._COOKIE_SELECTORS:
-            try:
-                btn = page.locator(sel)
-                if await btn.is_visible(timeout=800):
-                    await btn.click()
-                    logger.info(f"YouTube Music: dismissed cookie banner via '{sel}'")
-                    return
-            except Exception:
-                pass
+        combined_sel = ", ".join(YouTubeMusicProvider._COOKIE_SELECTORS)
+        try:
+            btn = page.locator(combined_sel).first
+            if await btn.is_visible(timeout=500):
+                await btn.click(timeout=1000)
+                logger.info("YouTube Music: dismissed cookie banner.")
+        except Exception:
+            pass
 
     @staticmethod
     async def _wait_for_search_results(page) -> None:
-        """Wait for at least one search result container to appear."""
-        for sel in YouTubeMusicProvider._SEARCH_READY_SELECTORS:
-            try:
-                await page.wait_for_selector(sel, timeout=8000)
-                logger.info(f"YouTube Music: search results ready (matched '{sel}')")
-                return
-            except Exception:
-                continue
-        logger.warning("YouTube Music: no search result container detected within timeout")
+        """Wait for at least one search result container to appear in parallel."""
+        combined_sel = ", ".join(YouTubeMusicProvider._SEARCH_READY_SELECTORS)
+        try:
+            await page.wait_for_selector(combined_sel, timeout=6000)
+            logger.info("YouTube Music: search results ready.")
+        except Exception:
+            logger.warning("YouTube Music: search result container wait timed out, attempting fallback click.")
+
 
     @staticmethod
     async def _click_play_button(page) -> bool:
