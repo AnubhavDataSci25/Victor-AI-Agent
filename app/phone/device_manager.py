@@ -30,6 +30,7 @@ class PhoneDeviceManager:
         self.crypto = crypto or PhoneCrypto()
         self.paired_device: Optional[PhoneDevice] = None
         self.pending_pairing: Optional[dict[str, Any]] = None
+        self.is_connected: bool = False
         self.load_paired_device()
 
     def load_paired_device(self) -> Optional[PhoneDevice]:
@@ -157,13 +158,25 @@ class PhoneDeviceManager:
             if is_charging is not None:
                 self.paired_device.is_charging = is_charging
 
+    def set_connected(self, connected: bool) -> None:
+        """Explicitly tracks WebSocket connection state from the server."""
+        self.is_connected = connected
+        if self.paired_device:
+            if connected:
+                self.paired_device.status = PhoneStatus.ONLINE
+                self.paired_device.last_seen = time.time()
+            else:
+                self.paired_device.status = PhoneStatus.OFFLINE
+
     def check_liveness(self) -> PhoneStatus:
         """Checks if the device is currently active or has timed out."""
         if not self.paired_device:
             return PhoneStatus.UNPAIRED
 
         elapsed = time.time() - self.paired_device.last_seen
-        if elapsed > self.HEARTBEAT_TIMEOUT_SECONDS:
+        # If WebSocket is connected, give an extended grace period for background Doze mode
+        timeout = (self.HEARTBEAT_TIMEOUT_SECONDS * 2) if self.is_connected else self.HEARTBEAT_TIMEOUT_SECONDS
+        if elapsed > timeout:
             if self.paired_device.status != PhoneStatus.OFFLINE:
                 self.paired_device.status = PhoneStatus.OFFLINE
                 logger.info(f"Phone device '{self.paired_device.device_name}' is now OFFLINE (last seen {elapsed:.1f}s ago)")

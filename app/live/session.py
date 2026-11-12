@@ -26,8 +26,10 @@ class LiveSessionManager:
         self._recent_tool_calls: list[tuple[str, float]] = []
         self._failed_tools_in_turn: set[str] = set()
         self._had_tool_execution: bool = False
+        self._awaiting_post_tool_speech: bool = False
         self._turn_has_spoken: bool = False
         self._last_tool_error_msg: Optional[str] = None
+        self._pending_pre_tool_turn_complete: bool = False
         self.decision_engine = None
         self.is_in_cooldown: bool = False
         self.cooldown_task: Optional[asyncio.Task] = None
@@ -123,6 +125,12 @@ class LiveSessionManager:
             session_resumption=types.SessionResumptionConfig(
                 handle=self.resumption_handle
             ),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    silence_duration_ms=450,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                )
+            ),
             system_instruction=types.Content(
                 parts=[types.Part.from_text(
                     text=(
@@ -174,12 +182,15 @@ class LiveSessionManager:
                         "Use multi_agent_get_status to report the workflow stage and pipeline health, and multi_agent_download_artifact to retrieve, locate, or save generated READMEs and specifications in the user's Downloads folder. "
                         "For Android phone automation, use the dedicated phone companion tools: "
                         "Use phone_get_status to check phone connection status and battery. "
-                        "When the user asks to call someone (e.g., 'Victor, call Rahul' or 'Call Dad'), ALWAYS call phone_resolve_contact first. "
+                        "When the user asks to call someone (e.g., 'Victor, call Rahul', 'Call Dad', or 'Call 9105579003'), ALWAYS call phone_resolve_contact first. "
                         "If multiple contacts or phone numbers match, list them and ask the user to choose. "
                         "When a single contact/number is identified, you MUST explicitly ask the user for confirmation: 'Sir, I found <name> at <number>. Do you want me to call this number?'. "
                         "NEVER call phone_initiate_call without prior explicit affirmative user confirmation ('yes', 'call', 'proceed'). "
-                        "When the user confirms, call phone_initiate_call with the confirmed contact name and number. "
+                        "When the user confirms ('yes', 'call', 'proceed', 'haan lagao') or directly instructs you to dial that number, call phone_initiate_call with the contact name and number. "
+                        "If phone_initiate_call fails or is rejected, do NOT retry phone_initiate_call; explain the error to the user or invoke phone_resolve_contact first. "
                         "When an incoming call is announced ('Sir, ABC is calling'), call phone_answer_call if the user commands to pick up, or phone_reject_call if the user commands to reject or decline. "
+                        "To read, check, or list incoming notifications received on the companion phone (such as WhatsApp messages, SMS alerts, or app notifications), use phone_get_notifications. "
+                        "To clear or dismiss phone notifications, use phone_clear_notifications. "
                         "To open YouTube or search for videos on the phone, use phone_launch_youtube. "
                         "To unpair or revoke the phone, use phone_unpair. "
                         "For persistent date & reminder management: "
@@ -297,6 +308,8 @@ class LiveSessionManager:
                                         "type": "audio_output",
                                         "data": b64_audio
                                     })
+                                elif getattr(part, "text", None):
+                                    self._turn_has_spoken = True
                         
                         # Handle user live audio transcription
                         input_tx = getattr(server_content, "input_transcription", None)
@@ -330,35 +343,63 @@ class LiveSessionManager:
                         # When model finishes speaking its turn, go to LISTENING
                         # (not IDLE — IDLE would stop the orb reactivity)
                         if getattr(server_content, "turn_complete", False):
-                            # Proactive voice fallback: if tools executed but Gemini Live emitted no audio or speech
-                            if self._had_tool_execution and not self._turn_has_spoken:
-                                fallback_msg = self._last_tool_error_msg or "Sir, the requested operation has finished."
-                                logger.warning(
-                                    f"[Live Session] Turn ended without model response after tool execution. Speaking fallback: '{fallback_msg}'"
-                                )
-                                await self.session_manager.websocket_send_callback({
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": fallback_msg,
-                                })
-                                await self.session_manager.websocket_send_callback({
-                                    "type": "speak",
-                                    "text": fallback_msg,
-                                })
-                                if hasattr(self.session_manager, "memory"):
-                                    self.session_manager.memory.session.add_turn("assistant", fallback_msg)
+                            # If tools are currently executing or awaiting intermediate pre-tool turn_complete, ignore it
+                            if self._is_executing_tools or self._pending_pre_tool_turn_complete:
+                                logger.debug("[Live Session] Discarding intermediate pre-tool turn_complete from tool invocation.")
+                                self._pending_pre_tool_turn_complete = False
+                                continue
+                            else:
+                                # Proactive voice fallback: ONLY if we were awaiting post-tool response,
+                                # the model ended its turn without speaking, AND there was a tool failure.
+                                if self._awaiting_post_tool_speech:
+                                    self._awaiting_post_tool_speech = False
+                                    if not self._turn_has_spoken and self._last_tool_error_msg:
+                                        fallback_msg = self._last_tool_error_msg
+                                        logger.warning(
+                                            f"[Live Session] Turn ended without model response after tool failure. Injecting fallback into Gemini session: '{fallback_msg}'"
+                                        )
+                                        # Show the error in the transcript UI
+                                        await self.session_manager.websocket_send_callback({
+                                            "type": "transcript",
+                                            "role": "assistant",
+                                            "text": fallback_msg,
+                                        })
+                                        # Instead of using browser SpeechSynthesis TTS (which causes
+                                        # dual-voice when Gemini also generates audio), re-inject the
+                                        # error context back into the Gemini Live session so the model
+                                        # speaks it through its own single audio pipeline.
+                                        try:
+                                            if self.is_connected and self.session:
+                                                nudge = (
+                                                    f"[SYSTEM] The tool failed with this message: {fallback_msg} "
+                                                    "Please inform the user about this failure concisely."
+                                                )
+                                                if hasattr(self.session, "send"):
+                                                    await self.session.send(input=nudge, end_of_turn=True)
+                                                logger.info("[Live Session] Fallback error context injected into Gemini session for native audio response.")
+                                                # Re-arm the post-tool speech awaiter for the model's response
+                                                self._awaiting_post_tool_speech = True
+                                                self._turn_has_spoken = False
+                                                # Skip the turn-level reset below; let the model respond
+                                                continue
+                                        except Exception as nudge_err:
+                                            logger.debug(f"[Live Session] Fallback nudge injection failed: {nudge_err}")
+                                        if hasattr(self.session_manager, "memory"):
+                                            self.session_manager.memory.session.add_turn("assistant", fallback_msg)
 
-                            # Reset turn-level execution and speech trackers
-                            self._turn_tool_counts = {}
-                            self._failed_tools_in_turn = set()
-                            self._had_tool_execution = False
-                            self._turn_has_spoken = False
-                            self._last_tool_error_msg = None
+                                # Reset turn-level execution and speech trackers
+                                self._turn_tool_counts = {}
+                                self._failed_tools_in_turn = set()
+                                self._had_tool_execution = False
+                                self._awaiting_post_tool_speech = False
+                                self._pending_pre_tool_turn_complete = False
+                                self._turn_has_spoken = False
+                                self._last_tool_error_msg = None
 
-                            await self.session_manager.websocket_send_callback({
-                                "type": "orb_state",
-                                "state": "LISTENING"
-                            })
+                                await self.session_manager.websocket_send_callback({
+                                    "type": "orb_state",
+                                    "state": "LISTENING"
+                                })
 
                     # Handle Tool Calls
                     tool_call = getattr(response, "tool_call", None)
@@ -366,6 +407,9 @@ class LiveSessionManager:
                         # Suppress audio streaming immediately to avoid 1011 race condition
                         self._is_executing_tools = True
                         self._had_tool_execution = True
+                        self._awaiting_post_tool_speech = False
+                        # If current response didn't include turn_complete, expect intermediate pre-tool turn_complete
+                        self._pending_pre_tool_turn_complete = not getattr(getattr(response, "server_content", None), "turn_complete", False)
                         try:
                             # Signal EXECUTING state
                             await self.session_manager.set_state(VictorState.EXECUTING)
@@ -438,11 +482,6 @@ class LiveSessionManager:
                                             "status": "failed",
                                             "error": clean_err,
                                         })
-                                        await self.session_manager.websocket_send_callback({
-                                            "type": "transcript",
-                                            "role": "assistant",
-                                            "text": f"⚠️ {fc.name} failed: {clean_err}",
-                                        })
                                     else:
                                         await self.session_manager.websocket_send_callback({
                                             "type": "tool_execution",
@@ -457,6 +496,10 @@ class LiveSessionManager:
                                     function_responses=function_responses
                                 ))
                             
+                            # Tool responses dispatched; now awaiting model's post-tool turn to speak
+                            self._awaiting_post_tool_speech = True
+                            self._turn_has_spoken = False
+
                             # After sending responses back, the model will reason/speak
                             await self.session_manager.websocket_send_callback({
                                 "type": "orb_state",
@@ -679,9 +722,20 @@ class LiveSessionManager:
                 logger.error(f"Error sending audio chunk to Gemini Live: {e}")
                 self.is_connected = False
 
+    async def send_audio_stream_end(self):
+        """Signals end of user speech burst for zero-latency Hybrid VAD turn completion."""
+        if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
+            return
+        try:
+            if hasattr(self.session, "send_realtime_input"):
+                await self.session.send_realtime_input(audio_stream_end=True)
+        except Exception as e:
+            logger.debug(f"Error sending audio_stream_end to Gemini Live: {e}")
+
     async def send_text(self, text: str):
         """Sends user text turn to Gemini Live session and evaluates memory worthiness."""
         self._turn_tool_counts = {}
+        self._pending_pre_tool_turn_complete = False
 
         # Evaluate typed text for persistent memory
         if hasattr(self.session_manager, "memory"):
@@ -708,6 +762,7 @@ class LiveSessionManager:
     async def close(self, clear_cooldown: bool = True):
         self.is_connected = False
         self._is_executing_tools = False
+        self._pending_pre_tool_turn_complete = False
         if clear_cooldown:
             if self.cooldown_task and not self.cooldown_task.done():
                 self.cooldown_task.cancel()

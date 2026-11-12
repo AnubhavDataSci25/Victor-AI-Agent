@@ -37,10 +37,24 @@ class VictorNotificationListener : NotificationListenerService() {
             source = "sms"
         }
 
-        // Strictly emit minimal notification event without transferring message contents
+        // Strictly emit notification event with title and text preview
+        val extras = sbn.notification?.extras
+        val title = extras?.getCharSequence("android.title")?.toString() ?: ""
+        val text = extras?.getCharSequence("android.text")?.toString() ?: ""
+
+        if (source == null && (title.isNotBlank() || text.isNotBlank())) {
+            if (pkg.contains("telegram", ignoreCase = true)) source = "telegram"
+            else if (pkg.contains("instagram", ignoreCase = true)) source = "instagram"
+            else if (pkg.contains("gmail", ignoreCase = true)) source = "gmail"
+            else source = pkg.substringAfterLast('.')
+        }
+
         if (source != null) {
             val event = JSONObject()
             event.put("source", source)
+            event.put("title", title)
+            event.put("text", text)
+            event.put("package", pkg)
             event.put("post_time", sbn.postTime)
             notificationCallback?.invoke(event)
         }

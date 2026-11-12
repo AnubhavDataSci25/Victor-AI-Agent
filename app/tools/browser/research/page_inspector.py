@@ -117,14 +117,30 @@ class PageInspector:
 
         # 3. If HTTP was blocked, empty, or failed to yield product info, inspect via Playwright
         if not candidate or candidate.price.selling_price == 0.0:
-            try:
-                page = await self.driver.get_page()
-                await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                body_text = await page.evaluate("document.body.innerText")
-                title = await page.title()
-                candidate = self._parse_text(body_text, url, retailer, title or snippet_title)
-            except Exception as e:
-                logger.debug(f"[PageInspector] Playwright inspect failed for {url}: {e}")
+            snippet_price = PriceExtractor.parse_price(snippet_text) if snippet_text else PriceDetail()
+            is_driver_alive = bool(getattr(self.driver, "browser", None) and self.driver.browser.is_connected())
+            # If search snippet already yielded a valid selling price and browser driver is not actively running,
+            # use snippet candidate to avoid cold-launching heavy browser instance and timing out
+            if snippet_price.selling_price > 0.0 and not is_driver_alive:
+                candidate = CandidateProduct(
+                    candidate_id=f"snippet_{abs(hash(url)) % 10000}",
+                    product_name=snippet_title or "Unverified Product",
+                    retailer=retailer,
+                    source_url=url,
+                    price=snippet_price,
+                    verification_status="unverified_snippet",
+                    confidence=0.5,
+                    provenance=f"Extracted from search snippet: {snippet_text[:120]}...",
+                )
+            else:
+                try:
+                    page = await self.driver.get_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=6000)
+                    body_text = await page.evaluate("document.body.innerText")
+                    title = await page.title()
+                    candidate = self._parse_text(body_text, url, retailer, title or snippet_title)
+                except Exception as e:
+                    logger.debug(f"[PageInspector] Playwright inspect failed for {url}: {e}")
 
         # 4. Fallback to search snippet if page was completely unreachable
         if not candidate:

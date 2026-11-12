@@ -27,8 +27,17 @@ class ContactResolver(private val context: Context) {
             ContactsContract.CommonDataKinds.Phone.TYPE
         )
 
-        val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
-        val selectionArgs = arrayOf("%$cleanQuery%")
+        val hasDigits = cleanQuery.any { it.isDigit() }
+        val selection = if (hasDigits) {
+            "(${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?) OR (${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?)"
+        } else {
+            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+        }
+        val selectionArgs = if (hasDigits) {
+            arrayOf("%$cleanQuery%", "%$cleanQuery%")
+        } else {
+            arrayOf("%$cleanQuery%")
+        }
         val sortOrder = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC LIMIT 5"
 
         try {

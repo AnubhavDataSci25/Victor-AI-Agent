@@ -10,6 +10,7 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
+import re
 import time
 from typing import Callable, Optional
 
@@ -40,6 +41,55 @@ def _get_dipper_audio(filename: str) -> Optional[str]:
             return base64.b64encode(audio_path.read_bytes()).decode("utf-8")
         except Exception:
             return None
+    return None
+
+
+_WAKE_GREETING_PATTERNS = [
+    r"^(?:hello|hey|hi|ok|okay|alright)\s+victor\b",
+    r"^good\s+(?:morning|afternoon|evening)\s+victor\b",
+    r"^wake\s+up(?:\s+victor)?\b",
+    r"^victor\b",
+    r"^(?:hello|hey|hi)\b",
+    r"^good\s+(?:morning|afternoon|evening)\b",
+    r"^(?:start|listen|are\s+you\s+there|yes|okay|ok)\b",
+]
+
+_STANDALONE_WAKE_WORDS = {
+    "hello", "hey", "hi", "victor", "hello victor", "hey victor", "hi victor",
+    "ok victor", "okay victor", "alright victor", "wake up", "wake up victor",
+    "start", "listen", "are you there", "yes", "okay", "ok", "proceed",
+    "good morning", "good morning victor", "good afternoon", "good afternoon victor",
+    "good evening", "good evening victor"
+}
+
+
+def _extract_executable_command(command_text: str) -> Optional[str]:
+    """
+    Extracts the actionable request from an initial trigger command by stripping
+    wake words and greeting prefixes. If the command was purely a wake-up
+    phrase (e.g., 'Hello Victor', 'Victor', 'Hey Victor', 'Hi'), returns None.
+    This prevents Gemini Live from generating a redundant second greeting
+    after Victor's biometric verification success greeting has already played.
+    """
+    if not command_text:
+        return None
+
+    cleaned = command_text.strip()
+    normalized = re.sub(r"[^\w\s]", "", cleaned.lower()).strip()
+    if normalized in _STANDALONE_WAKE_WORDS:
+        return None
+
+    working = cleaned
+    for pattern in _WAKE_GREETING_PATTERNS:
+        match = re.match(pattern, working, flags=re.IGNORECASE)
+        if match:
+            working = working[match.end():].lstrip(" ,:;-!?.")
+            break
+
+    working = working.strip()
+    if working and re.sub(r"[^\w\s]", "", working.lower()).strip() not in _STANDALONE_WAKE_WORDS:
+        return working
+
     return None
 
 
@@ -286,8 +336,15 @@ class VictorSessionManager:
                 self._is_verifying_biometric = False
                 log_event(logger, logging.INFO, "biometric_auth_complete_session_active")
                 if self._pending_first_command:
-                    logger.info(f"Executing pending first command after authentication: '{self._pending_first_command}'")
-                    await self.live_session.send_text(self._pending_first_command)
+                    executable_cmd = _extract_executable_command(self._pending_first_command)
+                    if executable_cmd:
+                        logger.info(f"Executing pending first command after authentication: '{executable_cmd}'")
+                        await self.live_session.send_text(executable_cmd)
+                    else:
+                        logger.info(
+                            f"Pending first command '{self._pending_first_command}' was a wake-up greeting; "
+                            "suppressed redundant dispatch to Gemini Live to prevent duplicate assistance greeting."
+                        )
                 return True
             else:
                 await self.set_state(VictorState.ERROR)
@@ -332,6 +389,14 @@ class VictorSessionManager:
         self.last_activity_time = time.time()  # Reset watchdog on speech
         self._auth_manager.touch_activity()
         await self.live_session.send_audio(pcm_chunk)
+
+    async def handle_audio_stream_end(self):
+        """Signal end of user speech burst to Gemini Live for low-latency turn completion."""
+        if self.state != VictorState.ACTIVE or self._is_speaking:
+            return
+        if hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False):
+            return
+        await self.live_session.send_audio_stream_end()
 
     async def handle_command(self, command_text: str) -> bool:
         """Handle incoming text or voice command from user."""

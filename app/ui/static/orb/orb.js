@@ -143,9 +143,9 @@
             vec3 coreBlue = vec3(0.08, 0.42, 0.85);
             vec3 deepBlue = vec3(0.12, 0.52, 0.95);
             vec3 electricBlue = vec3(0.0, 0.72, 1.0);
-            vec3 cyanBlue = vec3(0.48, 0.92, 1.0);
-            vec3 speakingBlue = vec3(0.28, 0.96, 1.0);
-            vec3 listeningBlue = vec3(0.18, 0.25, 0.78);
+            vec3 cyanBlue = vec3(0.28, 0.82, 1.0);
+            vec3 speakingBlue = vec3(0.14, 0.84, 1.0);
+            vec3 listeningBlue = vec3(0.16, 0.24, 0.76);
 
             // Palette 2: "Victor von Doom" Emerald Green (Thinking / Processing / Executing)
             vec3 coreGreen = vec3(0.04, 0.42, 0.18);
@@ -174,8 +174,8 @@
             vec3 color = mix(curCore, curDeep, smoothstep(0.05, 0.60, vRadius));
             color = mix(color, curElectric, 0.22 + edge * (0.42 + vBrightness * 0.35));
             color = mix(color, curCyan, vCrest * edge * 0.68 + vFlow * edge * 0.18);
-            color += curElectric * vFlow * edge * (0.34 + vBrightness * 0.35);
-            color += curCyan * vCrest * (0.22 + edge * 0.25 + uAudio * 0.30);
+            color += curElectric * vFlow * edge * (0.28 + vBrightness * 0.28);
+            color += curCyan * vCrest * (0.15 + edge * 0.18 + uAudio * 0.20);
 
             vec3 mutedConnection = vec3(0.42, 0.55, 0.72);
             float connectionSignal = smoothstep(0.18, 0.92, uConnection);
@@ -184,28 +184,28 @@
             color += curElectric * uHeartbeatPulse * (0.10 + edge * 0.18);
 
             color = mix(color, curSpeaking, uSpeaking * (0.15 + vVocalBeat * 0.20));
-            color += curSpeaking * vVocalBeat * (0.16 + edge * 0.25);
+            color += curSpeaking * vVocalBeat * (0.10 + edge * 0.16);
 
             color = mix(color, curListening, uListening * (0.22 + edge * 0.16));
-            color += curListening * vListenBeat * (0.08 + edge * 0.12);
+            color += curListening * vListenBeat * (0.06 + edge * 0.10);
 
             float depthFade = mix(0.40, 1.0, vDepth);
             float limbFade = mix(0.22, 1.0, vLimb);
-            float alpha = (vHalo > 0.5 ? softParticle * uHalo * 0.055 : particle * vAlpha * depthFade * limbFade) * (0.80 + vBrightness * 0.75);
+            float alpha = (vHalo > 0.5 ? softParticle * uHalo * 0.045 : particle * vAlpha * depthFade * limbFade) * (0.62 + vBrightness * 0.52);
             if (alpha < 0.005) discard;
 
-            gl_FragColor = vec4(color * alpha * (0.75 + vBrightness * 0.78), alpha);
+            gl_FragColor = vec4(color * alpha * (0.60 + vBrightness * 0.55), alpha);
         }
     `;
 
     const PROFILES = {
         idle:           { energy: 0.36, brightness: 0.72, speed: 0.12, noise: 0.16, pulse: 0.26, halo: 0.42, warning: 0, green: 0, direction: 0.0 },
         wake:           { energy: 1.0,  brightness: 1.0,  speed: 1.6,  noise: 0.82, pulse: 1.25, halo: 0.96, warning: 0, green: 0, direction: 0.42 },
-        listening:      { energy: 0.65, brightness: 0.75, speed: 0.48, noise: 0.44, pulse: 0.82, halo: 0.60, warning: 0, green: 0, direction: 0.1 },
+        listening:      { energy: 0.65, brightness: 0.64, speed: 0.48, noise: 0.44, pulse: 0.82, halo: 0.48, warning: 0, green: 0, direction: 0.1 },
         thinking:       { energy: 0.82, brightness: 0.80, speed: 0.75, noise: 0.58, pulse: 0.60, halo: 0.72, warning: 0, green: 1, direction: -0.10 },
         processing:     { energy: 0.88, brightness: 0.86, speed: 1.10, noise: 0.76, pulse: 0.72, halo: 0.82, warning: 0, green: 1, direction: 0.24 },
         executing:      { energy: 0.95, brightness: 0.94, speed: 1.35, noise: 0.68, pulse: 0.78, halo: 0.86, warning: 0, green: 1, direction: 0.82 },
-        speaking:       { energy: 0.82, brightness: 0.92, speed: 0.62, noise: 0.50, pulse: 1.22, halo: 0.84, warning: 0, green: 0, direction: 0.05 },
+        speaking:       { energy: 0.82, brightness: 0.76, speed: 0.62, noise: 0.50, pulse: 1.22, halo: 0.66, warning: 0, green: 0, direction: 0.05 },
         authentication: { energy: 0.45, brightness: 0.60, speed: 0.24, noise: 0.20, pulse: 0.68, halo: 0.48, warning: 0, green: 0, direction: 0.0 },
         error:          { energy: 0.52, brightness: 0.72, speed: 0.80, noise: 0.94, pulse: 0.98, halo: 0.70, warning: 1, green: 0, direction: -0.35 },
         offline:        { energy: 0.08, brightness: 0.16, speed: 0.03, noise: 0.05, pulse: 0.08, halo: 0.06, warning: 0, green: 0, direction: 0.0 },
@@ -547,7 +547,7 @@
             const u = this.material.uniforms;
             u.uTime.value = elapsed;
             u.uEnergy.value = this.visual.energy + this.state.low * 0.24 + this.state.mid * 0.12;
-            u.uBrightness.value = this.visual.brightness + this.state.audio * 0.28 + this.state.high * 0.14;
+            u.uBrightness.value = this.visual.brightness + this.state.audio * 0.16 + this.state.high * 0.08;
             u.uSpeed.value = this.visual.speed + this.state.mid * 0.48;
             u.uNoise.value = this.visual.noise + this.state.mid * 0.28;
             u.uPulse.value = this.visual.pulse + this.state.low * 0.55;
@@ -555,7 +555,7 @@
             u.uLow.value = this.state.low;
             u.uMid.value = this.state.mid;
             u.uHigh.value = this.state.high;
-            u.uHalo.value = this.visual.halo + this.state.audio * 0.22;
+            u.uHalo.value = this.visual.halo + this.state.audio * 0.14;
             u.uWarning.value = this.visual.warning;
             u.uGreen.value = this.visual.green;
             u.uDirection.value = this.visual.direction;

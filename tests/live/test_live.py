@@ -455,7 +455,8 @@ def test_schema_hygiene_parameters_none_for_parameterless_tools():
 
 @pytest.mark.asyncio
 async def test_live_session_proactive_speech_fallback_after_tool_timeout():
-    """Verify that if a tool times out and the model ends the turn without speaking, Victor speaks proactive fallback."""
+    """Verify that if a tool times out and the model ends the turn without speaking,
+    Victor injects the error into Gemini's session for native audio (no browser SpeechSynthesis TTS)."""
     mock_session_manager = MagicMock()
     mock_session_manager.state = VictorState.ACTIVE
     mock_session_manager.set_state = AsyncMock()
@@ -465,6 +466,7 @@ async def test_live_session_proactive_speech_fallback_after_tool_timeout():
     manager.is_connected = True
     manager.session = MagicMock()
     manager.session.send_tool_response = AsyncMock()
+    manager.session.send = AsyncMock()
 
     # Tool execution returns timeout error
     manager.tool_dispatcher.handle_function_call = AsyncMock(
@@ -488,7 +490,329 @@ async def test_live_session_proactive_speech_fallback_after_tool_timeout():
     resp_tool_call.server_content = None
     resp_tool_call.tool_call = tool_call
 
-    # Msg 2: Server content with turn_complete=True, but NO audio and NO output transcription
+    # Msg 2: Intermediate pre-tool turn_complete (from model concluding tool-call request turn)
+    pre_server_content = MagicMock()
+    pre_server_content.turn_complete = True
+    pre_server_content.model_turn = None
+    pre_server_content.input_transcription = None
+    pre_server_content.output_transcription = None
+
+    resp_pre_turn_complete = MagicMock()
+    resp_pre_turn_complete.server_content = pre_server_content
+    resp_pre_turn_complete.tool_call = None
+
+    # Msg 3: Server content with turn_complete=True, but NO audio and NO output transcription (post-tool turn ends silently)
+    post_server_content = MagicMock()
+    post_server_content.turn_complete = True
+    post_server_content.model_turn = None
+    post_server_content.input_transcription = None
+    post_server_content.output_transcription = None
+
+    resp_post_turn_complete = MagicMock()
+    resp_post_turn_complete.server_content = post_server_content
+    resp_post_turn_complete.tool_call = None
+
+    # Msg 4: Model response after nudge injection (simulating Gemini speaking the error via native audio)
+    nudge_audio_content = MagicMock()
+    nudge_audio_content.turn_complete = False
+    audio_part = MagicMock()
+    audio_part.inline_data = MagicMock()
+    audio_part.inline_data.data = b"fake_pcm_error_narration"
+    nudge_audio_content.model_turn = MagicMock()
+    nudge_audio_content.model_turn.parts = [audio_part]
+    nudge_audio_content.input_transcription = None
+    nudge_audio_content.output_transcription = None
+
+    resp_nudge_audio = MagicMock()
+    resp_nudge_audio.server_content = nudge_audio_content
+    resp_nudge_audio.tool_call = None
+
+    # Msg 5: Final turn_complete after nudge response
+    final_turn_content = MagicMock()
+    final_turn_content.turn_complete = True
+    final_turn_content.model_turn = None
+    final_turn_content.input_transcription = None
+    final_turn_content.output_transcription = None
+
+    resp_final_turn = MagicMock()
+    resp_final_turn.server_content = final_turn_content
+    resp_final_turn.tool_call = None
+
+    async def mock_receive_gen():
+        yield resp_tool_call
+        yield resp_pre_turn_complete
+        yield resp_post_turn_complete
+        yield resp_nudge_audio
+        yield resp_final_turn
+        manager.is_connected = False
+
+    manager.session.receive = mock_receive_gen
+    await manager._receive_loop()
+
+    # Check WebSocket messages sent
+    sent_msgs = [call.args[0] for call in mock_session_manager.websocket_send_callback.await_args_list]
+    msg_types = [m.get("type") for m in sent_msgs]
+
+    # "speak" MUST NOT be sent — no browser SpeechSynthesis TTS (prevents dual-voice)
+    assert "speak" not in msg_types, f"Unexpected 'speak' TTS message sent: {[m for m in sent_msgs if m.get('type') == 'speak']}"
+
+    # Nudge must be injected into Gemini session via session.send()
+    manager.session.send.assert_awaited()
+    nudge_call_kwargs = manager.session.send.await_args.kwargs
+    assert "SYSTEM" in nudge_call_kwargs.get("input", "")
+    assert "timed out" in nudge_call_kwargs.get("input", "") or "encountered an issue" in nudge_call_kwargs.get("input", "")
+
+    # Must contain "transcript" informing user in chat/terminal
+    transcript_msgs = [m for m in sent_msgs if m.get("type") == "transcript" and m.get("role") == "assistant"]
+    assert any("timed out" in m.get("text", "") or "encountered an issue" in m.get("text", "") for m in transcript_msgs)
+
+    # Audio output from Gemini Live MUST be sent (native audio from nudge response)
+    assert "audio_output" in msg_types
+
+    # Must safely transition orb to LISTENING without getting stuck
+    orb_msgs = [m for m in sent_msgs if m.get("type") == "orb_state"]
+    assert orb_msgs[-1]["state"] == "LISTENING"
+
+
+@pytest.mark.asyncio
+async def test_no_duplicate_speech_when_tool_fails_and_model_speaks():
+    """Verify that when a tool fails/times out but Gemini Live speaks in the post-tool turn,
+    no redundant fallback 'speak' (TTS) is emitted, preventing duplicate overlapping voices."""
+    mock_session_manager = MagicMock()
+    mock_session_manager.state = VictorState.ACTIVE
+    mock_session_manager.set_state = AsyncMock()
+    mock_session_manager.websocket_send_callback = AsyncMock()
+
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager.session = MagicMock()
+    manager.session.send_tool_response = AsyncMock()
+
+    # Tool execution returns timeout error
+    manager.tool_dispatcher.handle_function_call = AsyncMock(
+        return_value=types.FunctionResponse(
+            name="browser_research",
+            id="call-research-1",
+            response={"status": "failed", "error": "Tool 'browser_research' timed out after 45.0s"},
+        )
+    )
+
+    fc = MagicMock()
+    fc.name = "browser_research"
+    fc.args = {"query": "Motorola Moto G60 Pro price"}
+    fc.id = "call-research-1"
+
+    tool_call = MagicMock()
+    tool_call.function_calls = [fc]
+
+    # Msg 1: Tool call request
+    resp_tool_call = MagicMock()
+    resp_tool_call.server_content = None
+    resp_tool_call.tool_call = tool_call
+
+    # Msg 2: Intermediate pre-tool turn_complete (from tool-call request turn)
+    pre_server_content = MagicMock()
+    pre_server_content.turn_complete = True
+    pre_server_content.model_turn = None
+    pre_server_content.input_transcription = None
+    pre_server_content.output_transcription = None
+
+    resp_pre_turn_complete = MagicMock()
+    resp_pre_turn_complete.server_content = pre_server_content
+    resp_pre_turn_complete.tool_call = None
+
+    # Msg 3: Model post-tool response with spoken audio & output transcription
+    post_server_content = MagicMock()
+    post_server_content.turn_complete = False
+
+    audio_part = MagicMock()
+    audio_part.inline_data = MagicMock()
+    audio_part.inline_data.data = b"fake_pcm_apology_audio"
+
+    post_server_content.model_turn = MagicMock()
+    post_server_content.model_turn.parts = [audio_part]
+    post_server_content.input_transcription = None
+
+    post_output_tx = MagicMock()
+    post_output_tx.text = "I apologize, Sir, but the request to check the price took too long and timed out."
+    post_server_content.output_transcription = post_output_tx
+
+    resp_post_turn = MagicMock()
+    resp_post_turn.server_content = post_server_content
+    resp_post_turn.tool_call = None
+
+    # Msg 4: Post-tool turn_complete
+    post_turn_complete_content = MagicMock()
+    post_turn_complete_content.turn_complete = True
+    post_turn_complete_content.model_turn = None
+    post_turn_complete_content.input_transcription = None
+    post_turn_complete_content.output_transcription = None
+
+    resp_post_turn_complete = MagicMock()
+    resp_post_turn_complete.server_content = post_turn_complete_content
+    resp_post_turn_complete.tool_call = None
+
+    async def mock_receive_gen():
+        yield resp_tool_call
+        yield resp_pre_turn_complete
+        yield resp_post_turn
+        yield resp_post_turn_complete
+        manager.is_connected = False
+
+    manager.session.receive = mock_receive_gen
+    await manager._receive_loop()
+
+    sent_msgs = [call.args[0] for call in mock_session_manager.websocket_send_callback.await_args_list]
+    msg_types = [m.get("type") for m in sent_msgs]
+
+    # 1. "speak" message MUST NOT be sent (no TTS voice speaking over Gemini Live!)
+    assert "speak" not in msg_types, f"Duplicate 'speak' message sent: {[m for m in sent_msgs if m.get('type') == 'speak']}"
+
+    # 2. Audio output from Gemini Live MUST be sent
+    assert "audio_output" in msg_types
+
+    # 3. Transcript MUST contain ONLY Gemini Live's explanation, NOT redundant failure banner as assistant
+    transcript_msgs = [m for m in sent_msgs if m.get("type") == "transcript" and m.get("role") == "assistant"]
+    all_transcript_text = " ".join(m.get("text", "") for m in transcript_msgs)
+    assert "I apologize, Sir" in all_transcript_text
+    assert not any("⚠️ browser_research failed" in m.get("text", "") for m in transcript_msgs)
+
+    # 4. Final orb state must be LISTENING
+    orb_msgs = [m for m in sent_msgs if m.get("type") == "orb_state"]
+    assert orb_msgs[-1]["state"] == "LISTENING"
+
+
+@pytest.mark.asyncio
+async def test_no_duplicate_speech_when_tool_succeeds_and_model_speaks():
+    """Verify that when a tool executes successfully and the model responds with speech,
+    no redundant 'operation is finished' fallback is emitted, preventing duplicate voices."""
+    mock_session_manager = MagicMock()
+    mock_session_manager.state = VictorState.ACTIVE
+    mock_session_manager.set_state = AsyncMock()
+    mock_session_manager.websocket_send_callback = AsyncMock()
+
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager.session = MagicMock()
+    manager.session.send_tool_response = AsyncMock()
+
+    # Tool execution succeeds
+    manager.tool_dispatcher.handle_function_call = AsyncMock(
+        return_value=types.FunctionResponse(
+            name="api_get_weather",
+            id="call-weather-1",
+            response={"location": "Allahabad", "temperature": 30.5, "condition": "Mainly clear"},
+        )
+    )
+
+    fc = MagicMock()
+    fc.name = "api_get_weather"
+    fc.args = {"location": "Allahabad"}
+    fc.id = "call-weather-1"
+
+    tool_call = MagicMock()
+    tool_call.function_calls = [fc]
+
+    # Msg 1: Tool call response from Gemini
+    resp_tool_call = MagicMock()
+    resp_tool_call.server_content = None
+    resp_tool_call.tool_call = tool_call
+
+    # Msg 2: Intermediate turn_complete for the tool-call request turn (before post-tool turn)
+    pre_server_content = MagicMock()
+    pre_server_content.turn_complete = True
+    pre_server_content.model_turn = None
+    pre_server_content.input_transcription = None
+    pre_server_content.output_transcription = None
+
+    resp_pre_turn_complete = MagicMock()
+    resp_pre_turn_complete.server_content = pre_server_content
+    resp_pre_turn_complete.tool_call = None
+
+    # Msg 3: Model post-tool response with spoken audio & output transcription
+    post_server_content = MagicMock()
+    post_server_content.turn_complete = True
+
+    audio_part = MagicMock()
+    audio_part.inline_data = MagicMock()
+    audio_part.inline_data.data = b"fake_pcm_weather_audio"
+
+    post_server_content.model_turn = MagicMock()
+    post_server_content.model_turn.parts = [audio_part]
+    post_server_content.input_transcription = None
+
+    post_output_tx = MagicMock()
+    post_output_tx.text = "The current temperature in Allahabad is 30.5°C with mainly clear skies."
+    post_server_content.output_transcription = post_output_tx
+
+    resp_post_turn = MagicMock()
+    resp_post_turn.server_content = post_server_content
+    resp_post_turn.tool_call = None
+
+    async def mock_receive_gen():
+        yield resp_tool_call
+        yield resp_pre_turn_complete
+        yield resp_post_turn
+        manager.is_connected = False
+
+    manager.session.receive = mock_receive_gen
+    await manager._receive_loop()
+
+    sent_msgs = [call.args[0] for call in mock_session_manager.websocket_send_callback.await_args_list]
+    msg_types = [m.get("type") for m in sent_msgs]
+
+    # 1. "speak" message MUST NOT be sent (no TTS voice speaking over Gemini Live!)
+    assert "speak" not in msg_types, f"Unexpected 'speak' message sent: {[m for m in sent_msgs if m.get('type') == 'speak']}"
+
+    # 2. Audio output from Gemini Live MUST be sent
+    assert "audio_output" in msg_types
+
+    # 3. Transcript MUST contain ONLY Gemini Live's explanation, NOT 'operation has finished'
+    transcript_msgs = [m for m in sent_msgs if m.get("type") == "transcript" and m.get("role") == "assistant"]
+    all_transcript_text = " ".join(m.get("text", "") for m in transcript_msgs)
+    assert "operation has finished" not in all_transcript_text
+    assert "Allahabad is 30.5°C" in all_transcript_text
+
+    # 4. Final orb state must be LISTENING
+    orb_msgs = [m for m in sent_msgs if m.get("type") == "orb_state"]
+    assert orb_msgs[-1]["state"] == "LISTENING"
+
+
+@pytest.mark.asyncio
+async def test_no_finished_fallback_when_tool_succeeds_and_model_silent():
+    """Verify that even if a successful tool's post-turn is silent, no redundant
+    'operation is finished' fallback is spoken."""
+    mock_session_manager = MagicMock()
+    mock_session_manager.state = VictorState.ACTIVE
+    mock_session_manager.set_state = AsyncMock()
+    mock_session_manager.websocket_send_callback = AsyncMock()
+
+    manager = LiveSessionManager(mock_session_manager)
+    manager.is_connected = True
+    manager.session = MagicMock()
+    manager.session.send_tool_response = AsyncMock()
+
+    manager.tool_dispatcher.handle_function_call = AsyncMock(
+        return_value=types.FunctionResponse(
+            name="system_adjust_volume",
+            id="call-vol-1",
+            response={"status": "success", "volume": 75},
+        )
+    )
+
+    fc = MagicMock()
+    fc.name = "system_adjust_volume"
+    fc.args = {"volume": 75}
+    fc.id = "call-vol-1"
+
+    tool_call = MagicMock()
+    tool_call.function_calls = [fc]
+
+    resp_tool_call = MagicMock()
+    resp_tool_call.server_content = None
+    resp_tool_call.tool_call = tool_call
+
+    # Silent post-tool turn
     server_content = MagicMock()
     server_content.turn_complete = True
     server_content.model_turn = None
@@ -507,20 +831,11 @@ async def test_live_session_proactive_speech_fallback_after_tool_timeout():
     manager.session.receive = mock_receive_gen
     await manager._receive_loop()
 
-    # Check WebSocket messages sent
     sent_msgs = [call.args[0] for call in mock_session_manager.websocket_send_callback.await_args_list]
     msg_types = [m.get("type") for m in sent_msgs]
 
-    # Must contain "speak" so TTS verbally informs user
-    assert "speak" in msg_types
-    speak_msgs = [m for m in sent_msgs if m.get("type") == "speak"]
-    assert any("timed out" in m.get("text", "") or "encountered an issue" in m.get("text", "") for m in speak_msgs)
-
-    # Must contain "transcript" informing user in chat/terminal
-    transcript_msgs = [m for m in sent_msgs if m.get("type") == "transcript" and m.get("role") == "assistant"]
-    assert any("failed" in m.get("text", "") or "timed out" in m.get("text", "") for m in transcript_msgs)
-
-    # Must safely transition orb to LISTENING without getting stuck
+    # No 'speak' should be sent because the tool succeeded (no error to report)
+    assert "speak" not in msg_types
     orb_msgs = [m for m in sent_msgs if m.get("type") == "orb_state"]
     assert orb_msgs[-1]["state"] == "LISTENING"
 

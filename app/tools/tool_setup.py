@@ -307,6 +307,8 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     try:
         from app.phone.tools import (
             PhoneAnswerCallTool,
+            PhoneClearNotificationsTool,
+            PhoneGetNotificationsTool,
             PhoneGetStatusTool,
             PhoneInitiateCallTool,
             PhoneLaunchYouTubeTool,
@@ -321,6 +323,8 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         registry.register(PhoneRejectCallTool())
         registry.register(PhoneLaunchYouTubeTool())
         registry.register(PhoneUnpairTool())
+        registry.register(PhoneGetNotificationsTool())
+        registry.register(PhoneClearNotificationsTool())
         logger.info("Registered phone companion automation tools.")
     except Exception as e:
         logger.warning(f"Phone tools unavailable: {e}")

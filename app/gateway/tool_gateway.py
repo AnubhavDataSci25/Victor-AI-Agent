@@ -422,12 +422,16 @@ class ToolGateway:
                 },
             )
 
+        err_msg = gateway_res.error or (result_payload if result_payload else "Execution failed")
         return types.FunctionResponse(
             name=tool_name,
             id=call_id,
             response={
-                "result": gateway_res.error or "Execution failed",
-                "error": gateway_res.error or "Execution failed",
+                "result": (
+                    f"{err_msg}. Do NOT retry calling '{tool_name}' with the same arguments. "
+                    "Inform the user of this outcome or perform the necessary preceding step."
+                ),
+                "error": str(err_msg),
                 "status": "failed",
             },
         )

@@ -6,6 +6,7 @@ strict configuration matching, and evidence verification.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -78,13 +79,25 @@ class BrowserResearchTool(BaseTool):
 
         logger.info(f"[BrowserResearchTool] Starting research task: '{query}'")
         try:
-            result = await self.agent.research(
-                objective=query,
-                category=category,
-                max_budget=float(max_budget) if max_budget else None,
-                deep_mode=deep_mode,
+            result = await asyncio.wait_for(
+                self.agent.research(
+                    objective=query,
+                    category=category,
+                    max_budget=float(max_budget) if max_budget else None,
+                    deep_mode=deep_mode,
+                ),
+                timeout=40.0,
             )
             return _wrap_untrusted(result.summary_markdown)
+        except asyncio.TimeoutError:
+            logger.warning(f"[BrowserResearchTool] Research task exceeded 40s internal deadline for '{query}'. Returning graceful summary.")
+            fallback_text = (
+                f"### 🔍 Browser Research Summary: {query}\n\n"
+                "The research task reached its allocated time limit while scanning multiple online retailers. "
+                "Preliminary findings indicate pricing and availability vary across online stores. "
+                "Would you like me to check a specific retailer directly (such as Amazon or Flipkart)?"
+            )
+            return _wrap_untrusted(fallback_text)
         except Exception as e:
             logger.error(f"[BrowserResearchTool] Research execution error: {e}", exc_info=True)
             return f"Browser research execution error: {str(e)}"

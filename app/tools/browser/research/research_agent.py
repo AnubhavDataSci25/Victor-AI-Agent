@@ -156,31 +156,51 @@ class BrowserResearchAgent:
             # Pick up to 4 high-relevance pages per iteration
             pages_to_inspect = unique_hits[:4]
             if pages_to_inspect:
-                state.add_trace(
-                    stage="EXTRACT",
-                    action="inspecting_pages_concurrently",
-                    details={"urls": [h.url for h in pages_to_inspect]},
-                )
-
-                inspect_tasks = [
-                    self.page_inspector.inspect_url(
-                        url=hit.url,
-                        snippet_title=hit.title,
-                        snippet_text=hit.snippet,
-                    )
-                    for hit in pages_to_inspect
-                ]
-                inspected_candidates = await asyncio.gather(*inspect_tasks, return_exceptions=True)
-
-                for hit, cand in zip(pages_to_inspect, inspected_candidates):
-                    inspected_urls.add(hit.url)
-                    if hit.url not in state.sources_checked:
-                        state.sources_checked.append(hit.url)
-
-                    if isinstance(cand, CandidateProduct):
+                remaining_time = state.timeout_seconds - (time.time() - state.started_at)
+                if remaining_time < 10.0:
+                    logger.info(f"[BrowserResearchAgent] Low time budget ({remaining_time:.1f}s); utilizing search snippets to prevent timeout.")
+                    for hit in pages_to_inspect:
+                        inspected_urls.add(hit.url)
+                        if hit.url not in state.sources_checked:
+                            state.sources_checked.append(hit.url)
+                        price = PriceExtractor.parse_price(hit.snippet)
+                        cand = CandidateProduct(
+                            candidate_id=f"snippet_{abs(hash(hit.url)) % 10000}",
+                            product_name=hit.title or "Unverified Product",
+                            retailer=self.page_inspector.identify_retailer(hit.url),
+                            source_url=hit.url,
+                            price=price,
+                            verification_status="unverified_snippet",
+                            confidence=0.5,
+                            provenance=f"Extracted from search snippet: {hit.snippet[:120]}...",
+                        )
                         state.candidates.append(cand)
-                    elif isinstance(cand, Exception):
-                        logger.debug(f"[BrowserResearchAgent] Error inspecting {hit.url}: {cand}")
+                else:
+                    state.add_trace(
+                        stage="EXTRACT",
+                        action="inspecting_pages_concurrently",
+                        details={"urls": [h.url for h in pages_to_inspect]},
+                    )
+
+                    inspect_tasks = [
+                        self.page_inspector.inspect_url(
+                            url=hit.url,
+                            snippet_title=hit.title,
+                            snippet_text=hit.snippet,
+                        )
+                        for hit in pages_to_inspect
+                    ]
+                    inspected_candidates = await asyncio.gather(*inspect_tasks, return_exceptions=True)
+
+                    for hit, cand in zip(pages_to_inspect, inspected_candidates):
+                        inspected_urls.add(hit.url)
+                        if hit.url not in state.sources_checked:
+                            state.sources_checked.append(hit.url)
+
+                        if isinstance(cand, CandidateProduct):
+                            state.candidates.append(cand)
+                        elif isinstance(cand, Exception):
+                            logger.debug(f"[BrowserResearchAgent] Error inspecting {hit.url}: {cand}")
 
             # D. Stage: NORMALIZE & COMPARE
             matches, rejected = CandidateComparator.filter_and_match(state.candidates, state.constraints)

@@ -303,3 +303,86 @@ async def test_multi_match_candidates_allow_approval_on_initiate_call(setup_gate
     assert len(gateway.candidate_matches) == 0
     assert gateway.pending_call_approval is None
 
+
+@pytest.mark.asyncio
+async def test_candidate_switching_when_staged_number_differs(setup_gateway):
+    """Test that if pending approval was for number A, but user calls number B from candidates, it switches."""
+    gateway, _, _ = setup_gateway
+    dispatched = []
+
+    async def mock_dispatcher(msg: PhoneMessage):
+        dispatched.append(msg.payload)
+        return {"success": True}
+
+    gateway.set_command_dispatcher(mock_dispatcher)
+
+    # Staged with Candidate 1 (+918630327774)
+    gateway.pending_call_approval = PendingCallApproval(
+        contact_name="Papa Mobile",
+        phone_number="+918630327774",
+    )
+    # Candidate matches contains both Candidate 1 and Candidate 2
+    from app.phone.models import ContactMatch
+    gateway.candidate_matches = [
+        ContactMatch(name="Papa Mobile", number="+918630327774", type="Mobile"),
+        ContactMatch(name="Papa Other", number="9997579003", type="Other"),
+    ]
+
+    # User initiates call to Candidate 2
+    res_call = await gateway.initiate_call("Papa Other", "9997579003")
+    assert res_call["success"] is True
+    assert len(dispatched) == 1
+    assert dispatched[0]["phone_number"] == "9997579003"
+
+
+
+@pytest.mark.asyncio
+async def test_resolve_contact_direct_number_stages_approval(setup_gateway):
+    """Test that direct numeric phone numbers auto-stage call approval without remote contact lookup."""
+    gateway, _, _ = setup_gateway
+    dispatched = []
+
+    async def mock_dispatcher(msg: PhoneMessage):
+        dispatched.append(msg)
+        return {"success": True}
+
+    gateway.set_command_dispatcher(mock_dispatcher)
+
+    res = await gateway.resolve_contact("9105579003")
+    assert res["success"] is True
+    assert res["ambiguous"] is False
+    assert res["phone_number"] == "9105579003"
+    assert gateway.pending_call_approval is not None
+    assert gateway.pending_call_approval.phone_number == "9105579003"
+
+    call_res = await gateway.initiate_call("9105579003", "9105579003")
+    assert call_res["success"] is True
+    assert len(dispatched) == 1
+    assert dispatched[0].payload["phone_number"] == "9105579003"
+
+
+def test_gateway_notifications_fetch_and_clear(setup_gateway):
+    """Test that PhoneGateway can retrieve and clear notifications from phone server."""
+    gateway, _, _ = setup_gateway
+
+    class MockServer:
+        def __init__(self):
+            self.recent_notifications = [
+                {"title": "Alice", "text": "Are you coming?", "package": "com.whatsapp", "received_at": "12:00:00"},
+                {"title": "Bank Alert", "text": "OTP is 123456", "package": "com.android.mms", "received_at": "12:01:00"},
+            ]
+
+    server = MockServer()
+    gateway.server = server
+
+    notifs = gateway.get_recent_notifications(limit=5)
+    assert len(notifs) == 2
+    assert notifs[0]["title"] == "Alice"
+    assert notifs[0]["read"] is True
+
+    cleared_count = gateway.clear_notifications()
+    assert cleared_count == 2
+    assert len(server.recent_notifications) == 0
+
+
+

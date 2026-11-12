@@ -62,6 +62,92 @@ async def root():
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
 
+
+def _collect_system_health() -> dict:
+    """Collect real-time CPU, RAM, Disk, and Network metrics for the HUD."""
+    import shutil
+    import socket
+    cpu_pct = 0.0
+    ram_pct = 0
+    ram_used_gb = 0.0
+    ram_total_gb = 0.0
+    disk_pct = 0
+    network_online = False
+
+    try:
+        import ctypes
+        import time as _time
+        from ctypes import Structure, byref, c_ulong, c_ulonglong
+
+        class MEMORYSTATUSEX(Structure):
+            _fields_ = [
+                ("dwLength", c_ulong),
+                ("dwMemoryLoad", c_ulong),
+                ("ullTotalPhys", c_ulonglong),
+                ("ullAvailPhys", c_ulonglong),
+                ("ullTotalPageFile", c_ulonglong),
+                ("ullAvailPageFile", c_ulonglong),
+                ("ullTotalVirtual", c_ulonglong),
+                ("ullAvailVirtual", c_ulonglong),
+                ("ullAvailExtendedVirtual", c_ulonglong),
+            ]
+
+        class FILETIME(Structure):
+            _fields_ = [("dwLowDateTime", c_ulong), ("dwHighDateTime", c_ulong)]
+
+        mem = MEMORYSTATUSEX()
+        mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(byref(mem))
+        ram_pct = int(mem.dwMemoryLoad)
+        ram_total_gb = round(mem.ullTotalPhys / (1024 ** 3), 1)
+        ram_used_gb = round((mem.ullTotalPhys - mem.ullAvailPhys) / (1024 ** 3), 1)
+
+        def _read_cpu():
+            idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
+            ctypes.windll.kernel32.GetSystemTimes(byref(idle), byref(kernel), byref(user))
+            return (
+                (idle.dwHighDateTime << 32) | idle.dwLowDateTime,
+                (kernel.dwHighDateTime << 32) | kernel.dwLowDateTime,
+                (user.dwHighDateTime << 32) | user.dwLowDateTime,
+            )
+
+        i1, k1, u1 = _read_cpu()
+        _time.sleep(0.08)
+        i2, k2, u2 = _read_cpu()
+        total_sys = (k2 - k1) + (u2 - u1)
+        if total_sys > 0:
+            cpu_pct = round(max(0.0, min(100.0, (total_sys - (i2 - i1)) * 100.0 / total_sys)), 1)
+    except Exception:
+        pass
+
+    try:
+        usage = shutil.disk_usage(str(_PROJECT_ROOT))
+        if usage.total > 0:
+            disk_pct = round((usage.used / usage.total) * 100)
+    except Exception:
+        pass
+
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=1.0).close()
+        network_online = True
+    except Exception:
+        network_online = False
+
+    return {
+        "cpu_pct": cpu_pct,
+        "ram_pct": ram_pct,
+        "ram_used_gb": ram_used_gb,
+        "ram_total_gb": ram_total_gb,
+        "disk_pct": disk_pct,
+        "network_online": network_online,
+        "model": "Gemini 3.8 Live",
+    }
+
+
+@app.get("/api/system-health")
+async def get_system_health():
+    return await asyncio.to_thread(_collect_system_health)
+
 from app.phone.server import get_local_ip, phone_server
 
 @app.websocket("/ws/phone")
@@ -136,6 +222,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 if session_manager.state in (VictorState.ACTIVE, VictorState.BIOMETRIC_PENDING):
                     pcm_chunk = base64.b64decode(payload.get("data", ""))
                     await session_manager.handle_audio_input(pcm_chunk)
+
+            elif msg_type == "audio_stream_end":
+                if session_manager.state == VictorState.ACTIVE:
+                    await session_manager.handle_audio_stream_end()
 
             elif msg_type == "user_command":
                 cmd_text = payload.get("text", "")

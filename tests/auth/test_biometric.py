@@ -323,3 +323,26 @@ async def test_continuous_audio_streaming_and_speech_suppression(session_setup):
     sm.live_session.send_audio.assert_not_called()
 
 
+# 14. Wake-Up Greetings Suppressed to Prevent Duplicate Assistance Prompt
+def test_extract_executable_command_prevents_duplicate_greeting():
+    from app.agent.session_manager import _extract_executable_command
+
+    # Pure wake words / greetings must return None (suppressed)
+    assert _extract_executable_command("Hello Victor") is None
+    assert _extract_executable_command("hello victor") is None
+    assert _extract_executable_command("Victor") is None
+    assert _extract_executable_command("Hey Victor") is None
+    assert _extract_executable_command("Hi Victor!") is None
+    assert _extract_executable_command("Wake up Victor") is None
+    assert _extract_executable_command("Good morning Victor") is None
+    assert _extract_executable_command("Yes") is None
+    assert _extract_executable_command("Okay") is None
+
+    # Actual commands with wake-up prefixes must cleanly strip the greeting
+    assert _extract_executable_command("Hello Victor, what is the weather in Delhi?") == "what is the weather in Delhi?"
+    assert _extract_executable_command("Hey Victor open YouTube") == "open YouTube"
+    assert _extract_executable_command("Victor, check my emails") == "check my emails"
+    assert _extract_executable_command("What time is it?") == "What time is it?"
+
+
+

@@ -46,19 +46,33 @@ def _wrap_untrusted(content: str) -> str:
 
 def _get_imap_connection() -> imaplib.IMAP4_SSL:
     """Create and authenticate an IMAP4_SSL connection from env vars."""
-    user = os.getenv("EMAIL_USER")
-    password = os.getenv("EMAIL_APP_PASSWORD")
-    server = os.getenv("IMAP_SERVER", "imap.gmail.com")
+    user = (os.getenv("EMAIL_USER") or "").strip()
+    raw_password = os.getenv("EMAIL_APP_PASSWORD") or ""
+    password = raw_password.strip().replace(" ", "")
+    server = (os.getenv("IMAP_SERVER") or "imap.gmail.com").strip()
 
     if not user or not password:
         raise RuntimeError(
             "Email credentials not configured. "
-            "Set EMAIL_USER and EMAIL_APP_PASSWORD in your .env file."
+            "Please set EMAIL_USER and EMAIL_APP_PASSWORD in your .env file."
         )
 
-    conn = imaplib.IMAP4_SSL(server)
-    conn.login(user, password)
-    return conn
+    try:
+        conn = imaplib.IMAP4_SSL(server, timeout=15)
+        conn.login(user, password)
+        return conn
+    except imaplib.IMAP4.error as e:
+        err_str = str(e)
+        if "AUTHENTICATIONFAILED" in err_str:
+            raise RuntimeError(
+                "Gmail authentication failed: Invalid credentials. "
+                "For Gmail, you must use a 16-character Google App Password (not your normal account password). "
+                "1. Go to https://myaccount.google.com/apppasswords\n"
+                "2. Create an App Password for 'Victor'\n"
+                "3. Copy the 16-character code into EMAIL_APP_PASSWORD in your .env file.\n"
+                "4. Ensure IMAP is enabled in Gmail -> Settings -> See all settings -> Forwarding and POP/IMAP."
+            ) from e
+        raise RuntimeError(f"IMAP server error: {err_str}") from e
 
 
 def _decode_header_value(raw: str | None) -> str:

@@ -39,6 +39,8 @@ ALLOWED_ACTIONS = {
     "reject_call",
     "launch_youtube",
     "get_status",
+    "get_notifications",
+    "clear_notifications",
 }
 
 
@@ -83,10 +85,12 @@ class PhoneGateway:
         device_manager: Optional[PhoneDeviceManager] = None,
         crypto: Optional[PhoneCrypto] = None,
         session_manager: Optional[Any] = None,
+        server: Optional[Any] = None,
     ) -> None:
         self.device_manager = device_manager or PhoneDeviceManager()
         self.crypto = crypto or self.device_manager.crypto
         self.session_manager = session_manager
+        self.server = server
         self.pending_call_approval: Optional[PendingCallApproval] = None
         self.candidate_matches: list[ContactMatch] = []
         self.current_incoming_call: Optional[IncomingCallState] = None
@@ -170,6 +174,26 @@ class PhoneGateway:
         self.pending_call_approval = None
         self.candidate_matches = []
 
+        # If user directly provided a phone number rather than a contact name
+        digits = re.sub(r"\D", "", name_query)
+        if len(digits) >= 7 and (name_query.startswith("+") or name_query.isdigit() or len(digits) >= 10):
+            sanitized = _sanitize_phone_number(name_query)
+            self.pending_call_approval = PendingCallApproval(
+                contact_name=sanitized,
+                phone_number=sanitized,
+            )
+            return {
+                "success": True,
+                "ambiguous": False,
+                "contact_name": sanitized,
+                "phone_number": sanitized,
+                "approval_token": self.pending_call_approval.token,
+                "message": (
+                    f"Sir, I found {sanitized}. Do you want me to call this number? "
+                    "(Please confirm with 'yes', 'call', or 'proceed')."
+                ),
+            }
+
         logger.info(f"Querying phone contacts for query: '{name_query}'")
         res = await self._send_phone_command("resolve_contact", {"query": name_query})
 
@@ -234,8 +258,15 @@ class PhoneGateway:
         if not dev_ok:
             return {"success": False, "message": dev_err}
 
-        # 1. If no active approval, attempt matching against candidate_matches from resolve_contact
-        if not self.pending_call_approval and self.candidate_matches:
+        # 1. If no active approval or current approval number doesn't match requested number,
+        # attempt matching against candidate_matches from resolve_contact
+        sanitized_req = _sanitize_phone_number(phone_number) if phone_number else ""
+        should_check_candidates = (
+            not self.pending_call_approval
+            or (self.pending_call_approval and sanitized_req and not _phone_numbers_match(sanitized_req, self.pending_call_approval.phone_number))
+        )
+
+        if should_check_candidates and self.candidate_matches:
             for cand in self.candidate_matches:
                 cand_sanitized = _sanitize_phone_number(cand.number)
                 if (phone_number and _phone_numbers_match(phone_number, cand.number)) or (
@@ -411,3 +442,45 @@ class PhoneGateway:
             return {"success": True, "message": "Phone has been successfully unpaired and revoked, Sir."}
         else:
             return {"success": False, "message": "No phone was paired with Victor."}
+
+    # =========================================================================
+    # Capability 4: Notification Management
+    # =========================================================================
+
+    def get_recent_notifications(self, limit: int = 5, unread_only: bool = False) -> list[dict[str, Any]]:
+        """Returns recent notifications received from the companion phone."""
+        notifs: list[dict[str, Any]] = []
+        if self.server and hasattr(self.server, "recent_notifications"):
+            notifs = self.server.recent_notifications
+        else:
+            try:
+                from app.phone.server import phone_server
+                notifs = getattr(phone_server, "recent_notifications", [])
+            except Exception:
+                pass
+
+        if unread_only:
+            filtered = [n for n in notifs if not n.get("read", False)]
+        else:
+            filtered = list(notifs)
+
+        # Mark fetched notifications as read
+        for n in filtered[:limit]:
+            n["read"] = True
+
+        return filtered[:limit]
+
+    def clear_notifications(self) -> int:
+        """Clears all cached notifications from the gateway."""
+        count = 0
+        if self.server and hasattr(self.server, "recent_notifications"):
+            count = len(self.server.recent_notifications)
+            self.server.recent_notifications.clear()
+        else:
+            try:
+                from app.phone.server import phone_server
+                count = len(phone_server.recent_notifications)
+                phone_server.recent_notifications.clear()
+            except Exception:
+                pass
+        return count

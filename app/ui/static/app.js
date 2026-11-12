@@ -52,10 +52,11 @@ let currentUtterance = null; // Preserved in outer scope to prevent V8 GC bug wi
 // ==========================================================================
 // REAL-TIME CHRONO TELEMETRY (CLOCK & DATE)
 // ==========================================================================
+let isMicMuted = false;
+
 function updateChronoTelemetry() {
     const now = new Date();
-    
-    // Time format: HH:MM:SS AM/PM
+
     if (hudClock) {
         hudClock.textContent = now.toLocaleTimeString('en-US', {
             hour: '2-digit',
@@ -65,14 +66,20 @@ function updateChronoTelemetry() {
         });
     }
 
-    // Date format: Day, Month Date, Year
     if (hudDate) {
         hudDate.textContent = now.toLocaleDateString('en-US', {
-            weekday: 'long',
-            month: 'long',
+            weekday: 'short',
+            month: 'short',
             day: 'numeric',
             year: 'numeric'
         });
+    }
+
+    const greetingTitle = document.getElementById('greetingTitle');
+    if (greetingTitle) {
+        const hr = now.getHours();
+        const period = hr < 12 ? 'Good Morning' : (hr < 17 ? 'Good Afternoon' : 'Good Evening');
+        greetingTitle.innerHTML = `${period}, <span class="greeting-name">Anubhav</span> 👋`;
     }
 }
 setInterval(updateChronoTelemetry, 1000);
@@ -82,11 +89,16 @@ updateChronoTelemetry();
 // AUDIO PIPELINE (16kHz PCM Input / 24kHz PCM Output)
 // ==========================================================================
 async function startAudioPipeline() {
-    if (audioCtx) {
+    const hasLiveMic = mediaStream && mediaStream.getAudioTracks().some(t => t.readyState === 'live');
+    if (audioCtx && hasLiveMic) {
         if (audioCtx.state === 'suspended') {
             await audioCtx.resume();
         }
         return;
+    }
+    if (audioCtx && !hasLiveMic) {
+        try { await audioCtx.close(); } catch (_) {}
+        audioCtx = null;
     }
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -116,37 +128,48 @@ async function startAudioPipeline() {
         speakerAnalyser.smoothingTimeConstant = 0.82;
         speakerAnalyser.connect(audioCtx.destination);
 
-        // Capture Processor for streaming to backend
-        scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+        // Capture Processor for streaming to backend (2048 samples = 128ms low-latency frames)
+        scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
         let silentFramesCount = 0;
-        const SILENCE_THRESHOLD = 0.005;
+        let hasSpokenInBurst = false;
+        let lastAudioSentAt = Date.now();
+        const SILENCE_THRESHOLD = 0.0015;
 
         scriptProcessor.onaudioprocess = (e) => {
             // Only stream during active conversation session; drop during tool execution or thinking
             if (currentState !== "ACTIVE" && currentState !== "LISTENING" && currentState !== "SPEAKING") return;
             if (currentState === "EXECUTING" || currentState === "THINKING") return;
 
-            // Acoustic echo suppression: drop mic packets while Victor's pre-auth SpeechSynthesis is speaking
-            if (isVictorSpeaking) return;
+            // Acoustic echo suppression & user mute: drop mic packets while muted or Victor is speaking
+            if (isMicMuted || isVictorSpeaking || Date.now() < micMutedUntil) return;
 
             const inputData = e.inputBuffer.getChannelData(0);
 
-            // Silence gating to avoid 1011 keepalive ping timeouts and context window exhaustion
+            // Silence gating + Hybrid VAD end-of-speech signaling + 25s keepalive
             let sumSq = 0;
             for (let i = 0; i < inputData.length; i++) {
                 sumSq += inputData[i] * inputData[i];
             }
             const rms = Math.sqrt(sumSq / inputData.length);
+            const nowMs = Date.now();
 
             if (rms < SILENCE_THRESHOLD) {
                 silentFramesCount++;
-                // Allow up to 3 silent frames (~750ms) to ensure turn endings are captured, then gate
-                if (silentFramesCount > 3) {
+                // On speech-to-silence (~500ms = 4 frames @ 128ms), notify Gemini Live immediately
+                if (silentFramesCount === 4 && hasSpokenInBurst) {
+                    hasSpokenInBurst = false;
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: "audio_stream_end" }));
+                    }
+                }
+                if (silentFramesCount > 4 && (nowMs - lastAudioSentAt) < 25000) {
                     return;
                 }
             } else {
                 silentFramesCount = 0;
+                hasSpokenInBurst = true;
             }
+            lastAudioSentAt = nowMs;
 
             const pcm16 = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
@@ -160,10 +183,12 @@ async function startAudioPipeline() {
                 binary += String.fromCharCode(bytes[i]);
             }
             
-            ws.send(JSON.stringify({
-                type: "audio_input",
-                data: btoa(binary)
-            }));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "audio_input",
+                    data: btoa(binary)
+                }));
+            }
         };
         
         const dummyGain = audioCtx.createGain();
@@ -263,6 +288,12 @@ function trackAudioEnergy() {
 function playAudioChunk(base64Data) {
     if (!audioCtx || !speakerAnalyser) return;
     
+    // Silence browser speech synthesis if Gemini Live audio is streaming
+    if ('speechSynthesis' in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
+        try { window.speechSynthesis.cancel(); } catch (_) {}
+        currentUtterance = null;
+    }
+
     const binary = atob(base64Data);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
@@ -313,7 +344,8 @@ function appendTranscriptEntry(role, text) {
     // If previous entry was from the same role within 2 seconds, concatenate for streaming sentences
     const lastEntry = transcriptEntries[transcriptEntries.length - 1];
     if (lastEntry && lastEntry.role === role && (Date.now() - lastEntry.timestamp < 2500)) {
-        lastEntry.text += text;
+        const needsSpace = lastEntry.text.length > 0 && !/\s$/.test(lastEntry.text) && !/^\s/.test(text) && !/^[.,!?;:]/.test(text);
+        lastEntry.text += (needsSpace ? " " : "") + text;
         lastEntry.timestamp = Date.now();
         const lastEl = transcriptStream.querySelector(`.transcript-entry:last-child .entry-text`);
         if (lastEl) {
@@ -334,6 +366,13 @@ function appendTranscriptEntry(role, text) {
     const article = document.createElement('article');
     article.className = `transcript-entry transcript-entry--${role}`;
 
+    const avatar = document.createElement('div');
+    avatar.className = 'entry-avatar';
+    avatar.textContent = role === 'user' ? 'A' : (role === 'tool' ? '</>' : 'V');
+
+    const body = document.createElement('div');
+    body.className = 'entry-body';
+
     const header = document.createElement('div');
     header.className = 'entry-header';
 
@@ -352,8 +391,11 @@ function appendTranscriptEntry(role, text) {
     textP.className = 'entry-text';
     textP.textContent = text;
 
-    article.appendChild(header);
-    article.appendChild(textP);
+    body.appendChild(header);
+    body.appendChild(textP);
+
+    article.appendChild(avatar);
+    article.appendChild(body);
 
     transcriptStream.appendChild(article);
     transcriptStream.scrollTop = transcriptStream.scrollHeight;
@@ -416,8 +458,41 @@ initOrbMoodSync();
 
 function updateUIState(stateName) {
     const s = String(stateName || "").toUpperCase();
-    if (globalStatusText) globalStatusText.textContent = s;
-    if (orbStateText) orbStateText.textContent = s;
+    if (globalStatusText) {
+        if (s === "ACTIVE" || s === "LISTENING" || s === "SPEAKING") {
+            globalStatusText.textContent = "System: Online";
+        } else if (s === "THINKING" || s === "PROCESSING" || s === "EXECUTING") {
+            globalStatusText.textContent = `System: ${s.charAt(0) + s.slice(1).toLowerCase()}`;
+        } else {
+            globalStatusText.textContent = s;
+        }
+    }
+    if (orbStateText) {
+        if (s === "ACTIVE" || s === "LISTENING") {
+            orbStateText.textContent = isMicMuted ? "Mic Muted" : "Live & Listening";
+        } else if (s === "SPEAKING") {
+            orbStateText.textContent = "Speaking";
+        } else if (s === "THINKING" || s === "PROCESSING" || s === "EXECUTING") {
+            orbStateText.textContent = s.charAt(0) + s.slice(1).toLowerCase() + "...";
+        } else {
+            orbStateText.textContent = s;
+        }
+    }
+
+    const micLabel = document.getElementById('micControlLabel');
+    if (micLabel) {
+        if (isMicMuted) {
+            micLabel.textContent = "Microphone Muted";
+        } else if (s === "SPEAKING") {
+            micLabel.textContent = "Speaking...";
+        } else if (s === "THINKING" || s === "PROCESSING" || s === "EXECUTING") {
+            micLabel.textContent = "Processing...";
+        } else if (s === "ACTIVE" || s === "LISTENING") {
+            micLabel.textContent = "Listening...";
+        } else {
+            micLabel.textContent = "Tap to Speak";
+        }
+    }
     
     if (window.VictorOrbInstance) {
         window.VictorOrbInstance.setState(s);
@@ -959,6 +1034,10 @@ ws.onmessage = (event) => {
             appendTranscriptEntry(message.role, message.text);
 
         } else if (message.type === "speak") {
+            if (isSpeaking || activeAudioSources.length > 0) {
+                console.log("[Victor Audio] Suppressed speak TTS because Gemini Live audio is active.");
+                return;
+            }
             if ('speechSynthesis' in window && message.text) {
                 try { window.speechSynthesis.cancel(); } catch (_) {}
                 isVictorSpeaking = true;
@@ -984,7 +1063,7 @@ ws.onmessage = (event) => {
             try { window.speechSynthesis.cancel(); } catch (_) {}
             isVictorSpeaking = false;
             currentUtterance = null;
-            micMutedUntil = 0;
+            micMutedUntil = Date.now() + 400; // Small grace period for speaker reverb decay
             if (audioCtx && audioCtx.state === 'suspended') {
                 audioCtx.resume();
             }
@@ -1246,3 +1325,338 @@ if (btnRejectCall) {
         }
     });
 }
+
+
+// ==========================================================================
+// NEURAL AGENTIC HUD CONTROLLER (HEALTH, SIDEBAR, MODULES, QUICK ACTIONS)
+// ==========================================================================
+
+function sendVictorCommand(text, prefillOnly = false) {
+    const inputEl = document.getElementById('commandTextInput');
+    if (prefillOnly && inputEl) {
+        inputEl.value = text;
+        inputEl.focus();
+        return;
+    }
+    if (!text || !text.trim()) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        appendTranscriptEntry("user", text.trim());
+        ws.send(JSON.stringify({ type: "user_command", text: text.trim() }));
+    }
+}
+
+// 1. Live System Health Polling (/api/system-health)
+async function refreshSystemHealth() {
+    try {
+        const res = await fetch('/api/system-health', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const cpuBar = document.getElementById('cpuBar');
+        const cpuVal = document.getElementById('cpuVal');
+        const ramBar = document.getElementById('ramBar');
+        const ramVal = document.getElementById('ramVal');
+        const diskBar = document.getElementById('diskBar');
+        const diskVal = document.getElementById('diskVal');
+        const netBadge = document.getElementById('netStatusBadge');
+        const modelEl = document.getElementById('activeModelName');
+
+        const cpuPct = Math.round(Number(data.cpu_pct || 0));
+        const ramPct = Math.round(Number(data.ram_pct || 0));
+        const diskPct = Math.round(Number(data.disk_pct || 0));
+
+        if (cpuBar) cpuBar.style.width = `${cpuPct}%`;
+        if (cpuVal) cpuVal.textContent = `${cpuPct}%`;
+        if (ramBar) ramBar.style.width = `${ramPct}%`;
+        if (ramVal) ramVal.textContent = `${ramPct}%`;
+        if (diskBar) diskBar.style.width = `${diskPct}%`;
+        if (diskVal) diskVal.textContent = `${diskPct}%`;
+        if (netBadge) {
+            netBadge.textContent = data.network_online ? 'ONLINE' : 'LOCAL';
+            netBadge.style.color = data.network_online ? 'var(--accent-emerald)' : 'var(--accent-amber)';
+        }
+        if (modelEl && data.model) {
+            modelEl.textContent = data.model;
+        }
+    } catch (_) {
+        // Silent fallback when server restarts
+    }
+}
+refreshSystemHealth();
+setInterval(refreshSystemHealth, 10000);
+
+// 2. Microphone Mute / Interaction Control
+function toggleMicrophoneMute() {
+    isMicMuted = !isMicMuted;
+    const micBtn = document.getElementById('micControlBtn');
+    const topMicBtn = document.getElementById('topbarMicBtn');
+    const sttPill = document.getElementById('sttPipelinePill');
+    const sttLabel = document.getElementById('sttStatusLabel');
+
+    if (micBtn) micBtn.classList.toggle('is-muted', isMicMuted);
+    if (topMicBtn) topMicBtn.classList.toggle('is-muted', isMicMuted);
+    if (sttPill) sttPill.classList.toggle('is-muted', isMicMuted);
+    if (sttLabel) sttLabel.textContent = isMicMuted ? '(Mic Muted)' : '(STT Active)';
+
+    if (!isMicMuted && (!audioCtx || audioCtx.state === 'suspended')) {
+        startAudioPipeline().catch(() => {});
+    }
+    updateUIState(currentState);
+}
+
+const micControlBtn = document.getElementById('micControlBtn');
+const topbarMicBtn = document.getElementById('topbarMicBtn');
+if (micControlBtn) micControlBtn.addEventListener('click', toggleMicrophoneMute);
+if (topbarMicBtn) topbarMicBtn.addEventListener('click', toggleMicrophoneMute);
+
+// 3. Sidebar Collapse & Module Drawer Navigation
+const hudSidebar = document.getElementById('hudSidebar');
+const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
+if (sidebarToggleBtn && hudSidebar) {
+    sidebarToggleBtn.addEventListener('click', () => {
+        hudSidebar.classList.toggle('is-collapsed');
+    });
+}
+
+const MODULE_DEFINITIONS = {
+    computer: {
+        title: 'Computer Control',
+        actions: [
+            { title: 'Take Screenshot', desc: 'Capture current desktop screen', cmd: 'Take a screenshot', prefill: false },
+            { title: 'Adjust Volume', desc: 'Set system master audio level', cmd: 'Set volume to ', prefill: true },
+            { title: 'Adjust Brightness', desc: 'Change display brightness level', cmd: 'Set brightness to ', prefill: true },
+            { title: 'Open Windows Settings', desc: 'Launch system settings panel', cmd: 'Open Windows settings', prefill: false },
+        ]
+    },
+    browser: {
+        title: 'Web & Browser Automation',
+        actions: [
+            { title: 'Open Website', desc: 'Navigate Playwright browser to URL', cmd: 'Open website ', prefill: true },
+            { title: 'Open YouTube', desc: 'Launch YouTube in browser', cmd: 'Open YouTube', prefill: false },
+            { title: 'Open ChatGPT / Claude / Gemini', desc: 'Launch AI web assistants', cmd: 'Open Gemini in browser', prefill: false },
+            { title: 'Current Affairs & News', desc: 'Get latest real-time news updates', cmd: 'Give me latest tech news', prefill: false },
+        ]
+    },
+    applications: {
+        title: 'Applications & Google Services',
+        actions: [
+            { title: 'Open Application', desc: 'Launch any installed desktop app', cmd: 'Open ', prefill: true },
+            { title: 'Google Keep Notes', desc: 'Create or search Keep notes', cmd: 'Create a Google Keep note ', prefill: true },
+            { title: 'Google Calendar', desc: 'Schedule or inspect calendar events', cmd: 'Open Google Calendar', prefill: false },
+            { title: 'Google Meet', desc: 'Create or join a Meet call', cmd: 'Create an instant Google Meet', prefill: false },
+        ]
+    },
+    system: {
+        title: 'System Monitor & Telemetry',
+        actions: [
+            { title: 'Full Performance Check', desc: 'Query CPU, RAM, and battery health', cmd: 'Check my system performance and battery', prefill: false },
+            { title: 'Network & Wi-Fi Status', desc: 'Inspect active SSID and internet', cmd: 'Check Wi-Fi and network status', prefill: false },
+            { title: 'Bluetooth Status', desc: 'Check Bluetooth hardware status', cmd: 'Check Bluetooth status', prefill: false },
+            { title: 'Check Phone Status', desc: 'Inspect paired Android companion', cmd: 'Check my phone status and battery', prefill: false },
+        ]
+    },
+    memory: {
+        title: 'Memory & Context',
+        actions: [
+            { title: 'Recall Memory', desc: 'Search long-term remembered facts', cmd: 'What do you remember about ', prefill: true },
+            { title: 'Remember Preference', desc: 'Store a personal preference', cmd: 'Remember that ', prefill: true },
+            { title: 'List Reminders', desc: 'View upcoming tasks & deadlines', cmd: 'List my upcoming reminders', prefill: false },
+            { title: 'Create Reminder', desc: 'Schedule a dated task or birthday', cmd: 'Remind me to ', prefill: true },
+        ]
+    },
+    screen: {
+        title: 'Screen & Visual Intelligence',
+        actions: [
+            { title: 'Analyze Screen', desc: 'Understand what is currently visible', cmd: 'Analyze what is on my screen right now', prefill: false },
+            { title: 'Open Camera', desc: 'Activate live camera feed', cmd: 'Open camera', prefill: false },
+            { title: 'Scan QR / Barcode', desc: 'Decode QR from screen or camera', cmd: 'Scan QR code on screen', prefill: false },
+            { title: 'Visual Copy Text', desc: 'Extract text from screen to clipboard', cmd: 'Copy text from my screen', prefill: false },
+        ]
+    },
+    automations: {
+        title: 'Automations & Phone Companion',
+        actions: [
+            { title: 'Read Phone Notifications', desc: 'Summarize WhatsApp & SMS alerts', cmd: 'Read my recent phone notifications', prefill: false },
+            { title: 'Call Phone Contact', desc: 'Dial contact via Android companion', cmd: 'Call ', prefill: true },
+            { title: 'Check Unread Emails', desc: 'Fetch unread inbox summary', cmd: 'Check my unread emails', prefill: false },
+            { title: 'Play Music', desc: 'Stream music via playback engine', cmd: 'Play music ', prefill: true },
+        ]
+    },
+    agents: {
+        title: 'Agents (Multi-Agent Workflows)',
+        actions: [
+            { title: 'Start New Project Plan', desc: 'Launch multi-agent research & spec', cmd: 'Start a multi-agent project to build ', prefill: true },
+            { title: 'Check Pipeline Status', desc: 'Inspect active multi-agent workflow', cmd: 'Check multi-agent project status', prefill: false },
+            { title: 'Download Project Artifact', desc: 'Save generated README/spec to Downloads', cmd: 'Download multi-agent artifact', prefill: false },
+        ]
+    },
+    tools: {
+        title: 'Registered Capabilities (104 Tools)',
+        actions: [
+            { title: 'Weather & Forecast', desc: 'Live weather via public API', cmd: 'What is the weather today?', prefill: false },
+            { title: 'Stock Market Quote', desc: 'Real-time stock ticker lookup', cmd: 'Tell me about NVIDIA stock', prefill: false },
+            { title: 'Search Local Files', desc: 'Find files across your workspace', cmd: 'Search files for ', prefill: true },
+            { title: 'Coding & Shell Agent', desc: 'Write or run code safely', cmd: 'Write a Python script to ', prefill: true },
+        ]
+    },
+    labs: {
+        title: 'Victor Labs (Experimental)',
+        actions: [
+            { title: 'Live Camera Analysis', desc: 'Continuous visual scene monitoring', cmd: 'Start live camera analysis', prefill: false },
+            { title: 'YouTube on Phone', desc: 'Cast video search to Android phone', cmd: 'Open YouTube on my phone for ', prefill: true },
+            { title: 'Pair Android Phone', desc: 'Open Phone Companion pairing modal', cmd: '__OPEN_PHONE_MODAL__', prefill: false },
+        ]
+    },
+    settings: {
+        title: 'Settings & Security',
+        actions: [
+            { title: 'Phone Companion Pairing', desc: 'Manage paired Android device & PIN', cmd: '__OPEN_PHONE_MODAL__', prefill: false },
+            { title: 'Lock Terminal', desc: 'Lock Victor session immediately', cmd: '__LOCK_TERMINAL__', prefill: false },
+            { title: 'Toggle Microphone', desc: 'Mute or unmute live voice input', cmd: '__TOGGLE_MIC__', prefill: false },
+            { title: 'Windows Settings', desc: 'Open OS Display/Sound/Network settings', cmd: 'Open Windows settings', prefill: false },
+        ]
+    }
+};
+
+const moduleDrawer = document.getElementById('moduleDrawer');
+const moduleDrawerTitle = document.getElementById('moduleDrawerTitle');
+const moduleCardsGrid = document.getElementById('moduleCardsGrid');
+const moduleCloseBtn = document.getElementById('moduleCloseBtn');
+
+function openModuleView(viewKey) {
+    document.querySelectorAll('.sidebar-item, .topnav-item').forEach(btn => {
+        btn.classList.toggle('is-active', btn.dataset.view === viewKey);
+    });
+
+    if (viewKey === 'dashboard' || !MODULE_DEFINITIONS[viewKey]) {
+        if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        return;
+    }
+
+    const def = MODULE_DEFINITIONS[viewKey];
+    if (moduleDrawerTitle) moduleDrawerTitle.textContent = def.title;
+    if (moduleCardsGrid) {
+        moduleCardsGrid.innerHTML = '';
+        def.actions.forEach(item => {
+            const tile = document.createElement('button');
+            tile.type = 'button';
+            tile.className = 'module-action-tile';
+            tile.innerHTML = `<div class="module-action-tile-title">${item.title}</div><div class="module-action-tile-desc">${item.desc}</div>`;
+            tile.addEventListener('click', () => {
+                if (item.cmd === '__OPEN_PHONE_MODAL__') {
+                    if (phoneStatusBtn) phoneStatusBtn.click();
+                } else if (item.cmd === '__LOCK_TERMINAL__') {
+                    if (lockBtn) lockBtn.click();
+                } else if (item.cmd === '__TOGGLE_MIC__') {
+                    toggleMicrophoneMute();
+                } else {
+                    if (moduleDrawer) moduleDrawer.classList.add('hidden');
+                    document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => b.classList.toggle('is-active', b.dataset.view === 'dashboard'));
+                    sendVictorCommand(item.cmd, item.prefill);
+                }
+            });
+            moduleCardsGrid.appendChild(tile);
+        });
+    }
+    if (moduleDrawer) moduleDrawer.classList.remove('hidden');
+}
+
+document.querySelectorAll('.sidebar-item, .topnav-item').forEach(btn => {
+    btn.addEventListener('click', () => openModuleView(btn.dataset.view));
+});
+
+if (moduleCloseBtn) {
+    moduleCloseBtn.addEventListener('click', () => openModuleView('dashboard'));
+}
+
+// 4. Bottom Quick Actions Integration
+const QUICK_ACTION_MAP = {
+    open_app:       { cmd: 'Open ', prefill: true },
+    control_system: { cmd: 'Check my system performance and battery', prefill: false },
+    browse_web:     { cmd: 'Open website ', prefill: true },
+    analyze_screen: { cmd: 'Analyze what is on my screen right now', prefill: false },
+    run_code:       { cmd: 'Run Python code: ', prefill: true },
+    create_file:    { cmd: 'Create a file named ', prefill: true },
+    automation:     { cmd: 'Read my recent phone notifications', prefill: false },
+};
+
+document.querySelectorAll('.quick-action-card').forEach(card => {
+    card.addEventListener('click', () => {
+        const spec = QUICK_ACTION_MAP[card.dataset.action];
+        if (spec) sendVictorCommand(spec.cmd, spec.prefill);
+    });
+});
+
+// 5. Notifications Popover
+const notificationsBtn = document.getElementById('notificationsBtn');
+const notificationsPopover = document.getElementById('notificationsPopover');
+const notifPopoverList = document.getElementById('notifPopoverList');
+const notifBadge = document.getElementById('notifBadge');
+const clearNotifPopoverBtn = document.getElementById('clearNotifPopoverBtn');
+let hudNotifications = [];
+
+function addHudNotification(title, body) {
+    hudNotifications.unshift({ title, body, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+    if (hudNotifications.length > 20) hudNotifications.pop();
+    renderHudNotifications();
+}
+
+function renderHudNotifications() {
+    if (notifBadge) {
+        if (hudNotifications.length > 0) {
+            notifBadge.textContent = String(hudNotifications.length);
+            notifBadge.classList.remove('hidden');
+        } else {
+            notifBadge.classList.add('hidden');
+        }
+    }
+    if (!notifPopoverList) return;
+    if (hudNotifications.length === 0) {
+        notifPopoverList.innerHTML = '<div class="notif-empty">No recent alerts.</div>';
+        return;
+    }
+    notifPopoverList.innerHTML = '';
+    hudNotifications.forEach(n => {
+        const el = document.createElement('div');
+        el.className = 'notif-item';
+        const titleEl = document.createElement('div');
+        titleEl.className = 'notif-item-title';
+        titleEl.textContent = `${n.title} · ${n.time}`;
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'notif-item-body';
+        bodyEl.textContent = n.body;
+        el.appendChild(titleEl);
+        el.appendChild(bodyEl);
+        notifPopoverList.appendChild(el);
+    });
+}
+
+if (notificationsBtn && notificationsPopover) {
+    notificationsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        notificationsPopover.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+        if (!notificationsPopover.contains(e.target) && e.target !== notificationsBtn) {
+            notificationsPopover.classList.add('hidden');
+        }
+    });
+}
+if (clearNotifPopoverBtn) {
+    clearNotifPopoverBtn.addEventListener('click', () => {
+        hudNotifications = [];
+        renderHudNotifications();
+    });
+}
+
+// Forward incoming WS alerts into the notification popover
+ws.addEventListener('message', (event) => {
+    try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'phone_alert') {
+            addHudNotification(`Phone (${msg.source || 'Alert'})`, msg.title ? `${msg.title}: ${msg.text || ''}` : (msg.text || 'New notification'));
+        } else if (msg.type === 'reminder_notification') {
+            addHudNotification('Reminder', msg.message || 'Scheduled reminder triggered');
+        }
+    } catch (_) {}
+});

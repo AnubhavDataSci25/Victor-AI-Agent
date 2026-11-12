@@ -52,10 +52,12 @@ class PhoneServer:
         self.crypto = crypto or self.device_manager.crypto
         self.gateway = gateway or PhoneGateway(self.device_manager, self.crypto)
         self.gateway.set_command_dispatcher(self.dispatch_command)
+        self.gateway.server = self
 
         self.active_websocket: Optional[WebSocket] = None
         self._pending_responses: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._ui_notify_callback: Optional[Callable[[dict[str, Any]], Any]] = None
+        self.recent_notifications: list[dict[str, Any]] = []
 
     def set_ui_notify_callback(self, callback: Callable[[dict[str, Any]], Any]) -> None:
         """Sets callback to push notifications and incoming calls down to Victor's PC UI."""
@@ -96,6 +98,7 @@ class PhoneServer:
         """Main WebSocket loop for `/ws/phone` endpoint."""
         await websocket.accept()
         self.active_websocket = websocket
+        self.device_manager.set_connected(True)
         logger.info("Android companion connected to /ws/phone")
         if self.device_manager.paired_device:
             self.device_manager.paired_device.status = PhoneStatus.ONLINE
@@ -224,6 +227,7 @@ class PhoneServer:
             logger.error(f"Error in phone WebSocket connection: {e}")
         finally:
             self.active_websocket = None
+            self.device_manager.set_connected(False)
             if self.device_manager.paired_device:
                 self.device_manager.paired_device.status = PhoneStatus.OFFLINE
                 await self._notify_ui({
@@ -234,22 +238,48 @@ class PhoneServer:
 
     async def _handle_incoming_event(self, action: str, payload: dict[str, Any]) -> None:
         """Processes events originating from the phone companion."""
-        # Event 1: Minimal Notification Alert (WhatsApp or SMS)
+        # Event 1: Notification Alert (WhatsApp, SMS, or other apps)
         if action == "notification":
             source = payload.get("source", "unknown").lower()
-            if source == "whatsapp":
-                announcement = "Sir, you received a WhatsApp message."
-            elif source == "sms":
-                announcement = "Sir, you received an SMS message."
-            else:
-                announcement = f"Sir, you received a notification from {source}."
+            title = str(payload.get("title", "") or "").strip()
+            text = str(payload.get("text", "") or payload.get("message", "") or "").strip()
+            package = str(payload.get("package", "") or "").strip()
+            post_time = float(payload.get("post_time", time.time()))
 
-            logger.info(f"Notification event received: {source} (no message body transferred)")
+            if source == "whatsapp":
+                announcement = f"Sir, you received a WhatsApp message from {title}: \"{text}\"" if title and text else (
+                    f"Sir, you received a WhatsApp message from {title}." if title else "Sir, you received a WhatsApp message."
+                )
+            elif source == "sms":
+                announcement = f"Sir, you received an SMS message from {title}: \"{text}\"" if title and text else (
+                    f"Sir, you received an SMS message from {title}." if title else "Sir, you received an SMS message."
+                )
+            else:
+                announcement = f"Sir, you received a notification from {title or source}: \"{text}\"" if text else (
+                    f"Sir, you received a notification from {title or source}."
+                )
+
+            logger.info(f"Notification event received: {source} (from: '{title}')")
+
+            # Store in recent notifications cache
+            notif_entry = {
+                "source": source,
+                "title": title or source.capitalize(),
+                "text": text,
+                "package": package,
+                "timestamp": post_time,
+                "read": False,
+                "announcement": announcement,
+            }
+            self.recent_notifications.insert(0, notif_entry)
+            if len(self.recent_notifications) > 50:
+                self.recent_notifications.pop()
 
             # Notify UI
             await self._notify_ui({
                 "type": "phone_alert",
                 "source": source,
+                "title": title,
                 "text": announcement,
             })
             await self._notify_ui({

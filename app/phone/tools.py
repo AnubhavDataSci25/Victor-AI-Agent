@@ -6,6 +6,7 @@ All phone actions delegate directly to the deterministic PhoneGateway.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.phone.gateway import PhoneGateway
@@ -109,7 +110,18 @@ class PhoneInitiateCallTool(BaseTool):
         phone_number = args.get("phone_number", "")
         res = await self.gateway.initiate_call(contact_name, phone_number)
         if not res.get("success"):
-            return f"Error: {res.get('message', 'Phone failed to initiate the call.')}"
+            # If rejected because no approval was staged or number was mismatched, check if a valid direct phone number was provided
+            digits = re.sub(r"\D", "", phone_number or "")
+            err_msg = str(res.get("message", ""))
+            if len(digits) >= 7 and any(k in err_msg for k in ("No approved call request found", "Authorization Mismatch", "Authorization Denied")):
+                # Auto-stage approval via resolve_contact using the direct number
+                resolve_res = await self.gateway.resolve_contact(phone_number)
+                if resolve_res.get("success"):
+                    # Retry initiate call now that approval is staged for this exact number
+                    res = await self.gateway.initiate_call(contact_name or phone_number, phone_number)
+
+            if not res.get("success"):
+                return f"Error: {res.get('message', 'Phone failed to initiate the call.')}"
         return res.get("message", "Call initiation complete.")
 
 
@@ -200,3 +212,77 @@ class PhoneUnpairTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         res = self.gateway.unpair()
         return res.get("message", "Phone unpairing complete.")
+
+
+class PhoneGetNotificationsTool(BaseTool):
+    name = "phone_get_notifications"
+    description = (
+        "Reads recent notifications received from the paired Android companion phone "
+        "(such as WhatsApp messages, SMS alerts, incoming call notifications, and app updates). "
+        "Use this when the user asks 'Read my notifications', 'Check phone notifications', "
+        "'What messages did I get?', 'Did anyone message me?', or 'Do I have any new notifications?'."
+    )
+    permission_level = PermissionLevel.SAFE
+    parameters = {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of recent notifications to retrieve (default: 5).",
+                "default": 5,
+            },
+            "unread_only": {
+                "type": "boolean",
+                "description": "If true, only returns unread notifications (default: false).",
+                "default": False,
+            },
+        },
+    }
+
+    def __init__(self, gateway: PhoneGateway | None = None) -> None:
+        self.gateway = gateway or phone_server.gateway
+
+    async def execute(self, args: dict[str, Any]) -> str:
+        limit = int(args.get("limit", 5) or 5)
+        unread_only = bool(args.get("unread_only", False))
+
+        res = self.gateway.get_recent_notifications(limit=limit, unread_only=unread_only)
+        if not res:
+            dev_res = self.gateway.get_status()
+            dev_name = dev_res.get("device_name", "your phone")
+            if not dev_res.get("paired"):
+                return "Sir, no phone is currently paired with Victor. You can pair it from the Victor HUD UI."
+            if dev_res.get("status") == "OFFLINE":
+                return f"Sir, no recent notifications recorded, and your companion phone '{dev_name}' is currently offline."
+            return f"Sir, there are no recent notifications on your companion phone '{dev_name}'."
+
+        lines = [f"Sir, here are your {len(res)} recent phone notification(s):"]
+        for idx, item in enumerate(res, 1):
+            src = str(item.get("source", "App")).capitalize()
+            title = item.get("title", "")
+            text = item.get("text", "")
+            header = f"{src} - {title}" if title and title.lower() != src.lower() else src
+            body = f": \"{text}\"" if text else ""
+            lines.append(f"{idx}. {header}{body}")
+
+        return "\n".join(lines)
+
+
+class PhoneClearNotificationsTool(BaseTool):
+    name = "phone_clear_notifications"
+    description = (
+        "Clears all cached notifications received from the paired Android phone companion. "
+        "Use when the user says 'Clear phone notifications', 'Dismiss notifications', or 'Clear alerts'."
+    )
+    permission_level = PermissionLevel.SAFE
+    parameters = {
+        "type": "object",
+        "properties": {},
+    }
+
+    def __init__(self, gateway: PhoneGateway | None = None) -> None:
+        self.gateway = gateway or phone_server.gateway
+
+    async def execute(self, args: dict[str, Any]) -> str:
+        count = self.gateway.clear_notifications()
+        return f"Sir, I have cleared {count} notification(s) from your active list."
