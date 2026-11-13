@@ -1,5 +1,5 @@
 """
-Google Keep automation service for Victor 2.0.
+Google Keep automation service for Victor.
 
 Provides deterministic note creation, search, and navigation on Google Keep
 using Victor's persistent Chrome browser profile.

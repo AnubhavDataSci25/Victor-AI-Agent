@@ -1,5 +1,5 @@
 """
-Browser Research Tool for Victor 2.0.
+Browser Research Tool for Victor.
 Provides high-performance, iterative web research with multi-source price discovery,
 strict configuration matching, and evidence verification.
 """

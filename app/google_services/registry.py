@@ -1,5 +1,5 @@
 """
-Google Services Registry for Victor 2.0.
+Google Services Registry for Victor.
 
 Provides a centralized discovery and registration hub for all Google services.
 New Google services (Gmail, Drive, Docs, Sheets, etc.) can be registered here

@@ -1,5 +1,5 @@
 """
-Victor 2.0 — Email Tools.
+Victor — Email Tools.
 
 Provides read-only email access via IMAP using only Python built-in
 libraries (imaplib, email). All extracted email text is wrapped with a

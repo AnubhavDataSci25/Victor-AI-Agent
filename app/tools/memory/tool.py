@@ -1,5 +1,5 @@
 """
-Memory Tools for Victor 2.0.
+Memory Tools for Victor.
 
 Exposes memory_remember, memory_recall, and memory_forget to Gemini Live.
 """

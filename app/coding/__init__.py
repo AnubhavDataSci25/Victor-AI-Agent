@@ -1,5 +1,5 @@
 """
-Coding Computer Control Module for Victor 2.0.
+Coding Computer Control Module for Victor.
 
 Provides workspace path resolution, project inspection, Groq-based coding plan
 generation, controlled terminal execution, and VS Code integration.

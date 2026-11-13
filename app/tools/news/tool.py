@@ -1,5 +1,5 @@
 """
-Victor 2.0 Current Affairs & Updates Tools.
+Victor Current Affairs & Updates Tools.
 
 Provides:
 - current_affairs_get_updates: Fetches fresh categorized news (top 3 for a category, 1 for all).

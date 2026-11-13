@@ -1,5 +1,5 @@
 /**
- * Victor 2.0 Client Application Controller
+ * Victor Client Application Controller
  * Handles WebSocket communication, Web Audio streaming, HUD telemetry,
  * real-time transcript streaming, and Particle Orb synchronization.
  */

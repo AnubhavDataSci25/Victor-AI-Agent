@@ -1,5 +1,5 @@
 """
-Unit and integration tests for Victor 2.0 Google Services Automation
+Unit and integration tests for Victor Google Services Automation
 (Google Keep, Google Calendar, Google Meet) and unified command pipeline.
 """
 

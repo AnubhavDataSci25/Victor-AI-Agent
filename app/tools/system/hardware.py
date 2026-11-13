@@ -1,5 +1,5 @@
 """
-Hardware and OS Abstraction Layer for Victor 2.0 System Control.
+Hardware and OS Abstraction Layer for Victor System Control.
 
 Utilizes deterministic native Windows APIs (kernel32, wininet, shell32, user32,
 Core Audio COM, WMI) for instant, low-level system telemetry and safe controls

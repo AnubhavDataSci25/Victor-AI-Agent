@@ -1,5 +1,5 @@
 """
-Google Meet automation service for Victor 2.0.
+Google Meet automation service for Victor.
 
 Provides meeting creation, invite URL extraction, meeting code syntax validation,
 and seamless meeting joining using Victor's persistent Chrome browser profile.

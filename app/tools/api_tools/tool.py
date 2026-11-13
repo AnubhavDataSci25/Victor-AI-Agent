@@ -1,5 +1,5 @@
 """
-Victor 2.0 Free Public API Tools.
+Victor Free Public API Tools.
 
 Provides lightweight, async BaseTool implementations for:
 - api_get_weather: Real-time weather and forecast worldwide (Open-Meteo)

@@ -231,7 +231,7 @@ def test_example_2_project_context_retrieval(tmp_path):
     # Add other unrelated project facts
     manager.remember(
         key="victor_auth_mode",
-        content="Victor 2.0 uses Argon2id PIN-based authentication.",
+        content="Victor uses Argon2id PIN-based authentication.",
         category="project",
         tags=["auth", "pin", "security"]
     )
@@ -382,7 +382,7 @@ def test_multi_category_core_profile_context(tmp_path):
 
     manager.remember(key="preferred_ide", content="VS Code", category="preference")
     manager.remember(key="home_city", content="Bengaluru", category="user_fact")
-    manager.remember(key="current_project", content="Victor 2.0 AI Agent", category="project")
+    manager.remember(key="current_project", content="Victor AI Agent", category="project")
     manager.remember(key="rule_never", content="never expose secrets in logs", category="instruction")
 
     context = manager.get_core_profile_context()
@@ -391,7 +391,7 @@ def test_multi_category_core_profile_context(tmp_path):
     assert "User Facts:" in context
     assert "home_city: Bengaluru" in context
     assert "Projects:" in context
-    assert "current_project: Victor 2.0 AI Agent" in context
+    assert "current_project: Victor AI Agent" in context
     assert "Instructions:" in context
     assert "rule_never: never expose secrets in logs" in context
 

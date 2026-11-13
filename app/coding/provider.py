@@ -1,5 +1,5 @@
 """
-Coding Model Provider adapter layer for Victor 2.0.
+Coding Model Provider adapter layer for Victor.
 
 Defines the CodingModelProvider interface and provides a production-grade
 Groq implementation (defaulting to openai/gpt-oss-20b). Isolates inference

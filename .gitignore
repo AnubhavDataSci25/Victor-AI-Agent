@@ -17,6 +17,10 @@ ENV/
 config/secrets.yaml
 config/paired_phone.json
 config/reminders.db*
+config/gmail_oauth_client.json
+config/gmail_token.enc
+config/email_assistant.db*
+config/finance.db*
 
 # IDE
 .vscode/

@@ -1,5 +1,5 @@
 """
-Victor 2.0 Configuration.
+Victor Configuration.
 
 Typed, validated configuration loaded from environment variables and
 config/default.yaml. Uses pydantic-settings for environment binding
@@ -130,7 +130,7 @@ class VisionConfig(BaseModel):
 
 
 class VictorConfig(BaseModel):
-    """Top-level configuration for Victor 2.0."""
+    """Top-level configuration for Victor."""
     host: str = "0.0.0.0"
     port: int = 8000
     gemini_model: str = "gemini-3.8-live"

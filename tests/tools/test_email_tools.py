@@ -1,5 +1,5 @@
 """
-Unit tests for Victor 2.0 Email tools.
+Unit tests for Victor Email tools.
 """
 
 from unittest.mock import MagicMock, patch

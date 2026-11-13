@@ -1,5 +1,5 @@
 """
-Google Services Tools for Victor 2.0.
+Google Services Tools for Victor.
 
 Exposes deterministic Google Keep, Google Calendar, and Google Meet tools
 to Gemini Live and Victor's tool execution gateway.

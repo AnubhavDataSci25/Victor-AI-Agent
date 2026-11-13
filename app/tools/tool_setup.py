@@ -1,5 +1,5 @@
 """
-Victor 2.0 tool registration.
+Victor tool registration.
 
 Assembles the ToolRegistry with all v2 BaseTool instances. This
 replaces the role of factory.py (which imports v1-only classes) for
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry:
-    """Create and populate a ToolRegistry with all Victor 2.0 tools."""
+    """Create and populate a ToolRegistry with all Victor tools."""
     registry = ToolRegistry()
 
     # --- Browser Tools ---
@@ -180,6 +180,32 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         )
         registry.register(EmailGetUnreadSummaryTool())
         registry.register(EmailSearchMessagesTool())
+        from app.email_assistant.tools import (
+            EmailAutoSendPolicyTool,
+            EmailComposeDraftTool,
+            EmailDraftReplyTool,
+            EmailEditDraftTool,
+            EmailInboxSearchTool,
+            EmailManageScheduledTool,
+            EmailPreviewDraftTool,
+            EmailReadMessageTool,
+            EmailScheduleSendTool,
+            EmailSendApprovedTool,
+            EmailSummarizeInboxTool,
+            GmailConnectTool,
+        )
+        registry.register(GmailConnectTool())
+        registry.register(EmailComposeDraftTool())
+        registry.register(EmailEditDraftTool())
+        registry.register(EmailPreviewDraftTool())
+        registry.register(EmailSendApprovedTool())
+        registry.register(EmailScheduleSendTool())
+        registry.register(EmailManageScheduledTool())
+        registry.register(EmailInboxSearchTool())
+        registry.register(EmailReadMessageTool())
+        registry.register(EmailSummarizeInboxTool())
+        registry.register(EmailDraftReplyTool())
+        registry.register(EmailAutoSendPolicyTool())
         logger.info("Registered email tools.")
     except Exception as e:
         logger.warning(f"Email tools unavailable: {e}")
@@ -370,6 +396,36 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         logger.info("Registered Real-Time Date & Reminder tools.")
     except Exception as e:
         logger.warning(f"Reminder tools unavailable: {e}")
+
+    # --- Personal Finance, Expense & Bill Management Tools ---
+    try:
+        from app.finance.tools import (
+            FinanceDeleteTransactionTool,
+            FinanceGenerateReportTool,
+            FinanceListTransactionsTool,
+            FinanceManageBillTool,
+            FinanceManageBudgetTool,
+            FinanceManageSubscriptionTool,
+            FinancePayBillTool,
+            FinanceQueryTool,
+            FinanceRecordTransactionTool,
+            FinanceScanReceiptTool,
+            FinanceUpdateTransactionTool,
+        )
+        registry.register(FinanceRecordTransactionTool())
+        registry.register(FinanceUpdateTransactionTool())
+        registry.register(FinanceDeleteTransactionTool())
+        registry.register(FinanceListTransactionsTool())
+        registry.register(FinanceScanReceiptTool())
+        registry.register(FinanceManageBillTool())
+        registry.register(FinancePayBillTool())
+        registry.register(FinanceManageBudgetTool())
+        registry.register(FinanceManageSubscriptionTool())
+        registry.register(FinanceGenerateReportTool())
+        registry.register(FinanceQueryTool())
+        logger.info("Registered Personal Finance & Bill Management tools.")
+    except Exception as e:
+        logger.warning(f"Finance tools unavailable: {e}")
 
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")

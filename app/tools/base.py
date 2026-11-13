@@ -70,7 +70,7 @@ class Tool(ABC):
 
 
 class BaseTool(ABC):
-    """Lightweight async tool base class for Victor 2.0.
+    """Lightweight async tool base class for Victor.
 
     Unlike the Pydantic-based Tool class (used by filesystem tools),
     BaseTool uses a simple JSON schema dict for parameters and an

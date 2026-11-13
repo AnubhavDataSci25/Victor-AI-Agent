@@ -1,5 +1,5 @@
 """
-Screen Understanding Tool for Victor 2.0.
+Screen Understanding Tool for Victor.
 
 Provides vision AI screen comprehension to the Gemini Live agent.
 """

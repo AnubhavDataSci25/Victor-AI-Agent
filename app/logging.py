@@ -1,5 +1,5 @@
 """
-Structured logging for Victor 2.0.
+Structured logging for Victor.
 
 Provides:
 - SecretRedactingFormatter: masks credentials, PINs, tokens in log output

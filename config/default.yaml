@@ -1,4 +1,4 @@
-# Victor 2.0 — Default Configuration
+# Victor — Default Configuration
 # Override any value via environment variables (see .env)
 
 security:

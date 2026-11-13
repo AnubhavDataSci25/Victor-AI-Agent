@@ -135,7 +135,7 @@ Search for `system_instruction` in [app/live/session.py](file:///app/live/sessio
 
 ### 2. UI Title & Header (`app/ui/static/index.html` & `app/main.py`)
 - In `app/ui/static/index.html`, update the `<title>` tag and any header text with your assistant's name.
-- In `app/main.py`, update `FastAPI(title="Victor 2.0 API")` if desired.
+- In `app/main.py`, update `FastAPI(title="Victor API")` if desired.
 
 ### 3. Voice & Persona (`app/live/session.py`)
 Victor uses Gemini Live's prebuilt voice:

@@ -1,5 +1,5 @@
 """
-Tool registry — unified for Victor 2.0.
+Tool registry — unified for Victor.
 
 Supports both v1 Tool (sync, Pydantic) and v2 BaseTool (async, dict)
 tool types. This is the single choke point every tool call passes

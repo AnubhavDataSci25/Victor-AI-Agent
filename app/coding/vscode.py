@@ -1,5 +1,5 @@
 """
-VS Code automation integration for Victor 2.0.
+VS Code automation integration for Victor.
 
 Locates the VS Code executable on Windows and opens workspaces and files visibly
 using detached process execution.

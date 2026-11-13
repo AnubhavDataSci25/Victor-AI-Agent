@@ -1,7 +1,7 @@
 """
 Legacy Tool Factory (Victor 1.x compatibility shim).
 
-Superseded by app.tools.tool_setup.build_tool_registry in Victor 2.0.
+Superseded by app.tools.tool_setup.build_tool_registry in Victor.
 Maintained as a compatibility wrapper returning the populated ToolRegistry.
 """
 
@@ -19,7 +19,7 @@ def build_registry(
     browser_driver: Any = None,
     **kwargs: Any,
 ) -> ToolRegistry:
-    """Builds and returns the Victor 2.0 ToolRegistry.
+    """Builds and returns the Victor ToolRegistry.
     
     Provided for backwards compatibility with any callers expecting
     factory.build_registry().

@@ -1,5 +1,5 @@
 """
-System Information and Quick System Control Tools for Victor 2.0.
+System Information and Quick System Control Tools for Victor.
 
 Provides deterministic native Windows telemetry and safe system controls
 (battery, network, bluetooth, brightness, volume, CPU/RAM, notifications, settings)

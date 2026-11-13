@@ -1,5 +1,5 @@
 """
-Multi-Agent tools package for Victor 2.0.
+Multi-Agent tools package for Victor.
 """
 
 from app.tools.multi_agent.tool import (

@@ -1,5 +1,5 @@
 """
-Victor 2.0 BaseTool implementations for Multi-Agent Planning & Execution.
+Victor BaseTool implementations for Multi-Agent Planning & Execution.
 
 Orchestrates Gemini (Research & README), ChatGPT (Prompt Engineering & Specification),
 and Claude (Software Development) with strict human approval checkpoints,

@@ -31,13 +31,51 @@ logger = get_logger("main")
 
 _STATIC_DIR = _PROJECT_ROOT / "app" / "ui" / "static"
 
-app = FastAPI(title="Victor 2.0 API")
+app = FastAPI(title="Victor API")
 
 from app.reminders.scheduler import get_global_reminder_scheduler
 
 @app.on_event("startup")
 async def startup_event():
     scheduler = get_global_reminder_scheduler()
+
+    async def _scheduled_email_tick():
+        from app.email_assistant import get_email_assistant_manager
+        mgr = get_email_assistant_manager()
+        outcomes = await mgr.process_due_scheduled_emails()
+        for out in outcomes:
+            if out.get("message") and scheduler.notification_dispatcher:
+                try:
+                    res = scheduler.notification_dispatcher({
+                        "type": "reminder_notification",
+                        "message": out["message"],
+                    })
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception:
+                    pass
+
+    scheduler.register_tick_hook(_scheduled_email_tick)
+
+    async def _finance_bill_tick():
+        from app.finance import get_finance_manager
+        mgr = get_finance_manager()
+        alerts = await mgr.reminder_manager.check_due_bills_tick_hook()
+        for a in alerts:
+            if a.get("message") and scheduler.notification_dispatcher:
+                try:
+                    res = scheduler.notification_dispatcher({
+                        "type": "reminder_notification",
+                        "message": a["message"],
+                        "bill_id": a.get("bill_id"),
+                        "status": a.get("status"),
+                    })
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception:
+                    pass
+
+    scheduler.register_tick_hook(_finance_bill_tick)
     await scheduler.start()
 
 @app.on_event("shutdown")

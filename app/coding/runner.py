@@ -1,5 +1,5 @@
 """
-Controlled Terminal Runner for Victor 2.0.
+Controlled Terminal Runner for Victor.
 
 Executes project commands inside the validated workspace directory with
 timeout enforcement, output capture bounds, and PermissionEngine safety checks.

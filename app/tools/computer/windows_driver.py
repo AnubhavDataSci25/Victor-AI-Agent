@@ -33,7 +33,7 @@ class WindowsComputerDriver:
         executable = APP_WHITELIST[app_name_lower]
         try:
             # shell=False prevents shell injection. 
-            # DETACHED_PROCESS ensures Victor 2.0 does not hang waiting for the app to close.
+            # DETACHED_PROCESS ensures Victor does not hang waiting for the app to close.
             subprocess.Popen(
                 [executable], 
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

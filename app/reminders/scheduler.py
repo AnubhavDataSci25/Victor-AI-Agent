@@ -50,6 +50,12 @@ class ReminderScheduler:
 
         # Queue of reminders that triggered while session was locked / unauthenticated
         self._pending_auth_queue: List[ReminderRecord] = []
+        self._tick_hooks: List[Callable[[], Any]] = []
+
+    def register_tick_hook(self, hook: Callable[[], Any]) -> None:
+        """Registers an optional async callback invoked on each scheduler tick."""
+        if hook not in self._tick_hooks:
+            self._tick_hooks.append(hook)
 
     def set_notification_dispatcher(self, dispatcher: Callable[[Dict[str, Any]], Any]) -> None:
         """Sets or updates the notification callback (e.g. WebSocket or TTS output)."""
@@ -96,6 +102,15 @@ class ReminderScheduler:
 
                 # 2. Check pending auth queue if session became authenticated
                 await self._flush_pending_auth_queue()
+
+                # 2b. Run registered scheduler tick hooks (e.g., scheduled email delivery)
+                for hook in self._tick_hooks:
+                    try:
+                        res = hook()
+                        if asyncio.iscoroutine(res):
+                            await res
+                    except Exception as hook_err:
+                        logger.warning(f"[ReminderScheduler] Tick hook error: {hook_err}")
 
                 # 3. Calculate sleep duration until earliest pending reminder
                 earliest_next = self.store.get_earliest_next_reminder_time()

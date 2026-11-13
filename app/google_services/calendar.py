@@ -1,5 +1,5 @@
 """
-Google Calendar automation service for Victor 2.0.
+Google Calendar automation service for Victor.
 
 Provides deterministic event creation, strict date/time ambiguity validation,
 and calendar navigation using Victor's persistent Chrome browser profile.

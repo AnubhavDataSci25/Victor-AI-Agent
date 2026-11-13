@@ -1,5 +1,5 @@
 """
-Victor 2.0 BaseTool implementations for Real-Time Date & Reminder System.
+Victor BaseTool implementations for Real-Time Date & Reminder System.
 Integrates with ToolGateway, ToolRegistry, and Gemini Live API.
 """
 

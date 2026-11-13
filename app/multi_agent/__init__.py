@@ -1,5 +1,5 @@
 """
-Multi-Agent Project Planning & Execution module for Victor 2.0.
+Multi-Agent Project Planning & Execution module for Victor.
 
 Orchestrates Gemini (Research & README), ChatGPT (Prompt Engineering & Specification),
 and Claude (Project Development) with human-in-the-loop review gating and artifact downloads.

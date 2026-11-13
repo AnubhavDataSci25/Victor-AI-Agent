@@ -1,5 +1,5 @@
 """
-Unit tests for Victor 2.0 System Information & Quick System Control module.
+Unit tests for Victor System Information & Quick System Control module.
 
 Verifies deterministic native Windows telemetry and safe system controls
 (battery, network, bluetooth, brightness, volume, CPU/RAM, notifications, settings)

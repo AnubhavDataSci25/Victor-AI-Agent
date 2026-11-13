@@ -1,5 +1,5 @@
 """
-Google Services Package for Victor 2.0.
+Google Services Package for Victor.
 
 Provides modular and extensible automation for Google services (Keep, Calendar, Meet,
 and future services) using Victor's shared persistent Chrome browser session.

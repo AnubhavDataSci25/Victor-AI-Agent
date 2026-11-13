@@ -51,6 +51,8 @@ EXTERNAL_SIDE_EFFECT_TOOLS = {
     "file_explorer_move",
     "file_explorer_rename",
     "computer_submit_form",
+    "email_send_approved",
+    "email_schedule_send",
 }
 
 
@@ -339,11 +341,15 @@ class ToolGateway:
             return float(tool.timeout_seconds)
 
         name_lower = tool_name.lower()
-        if any(k in name_lower for k in ("multi_agent", "coding_execute", "test")):
+        if any(k in name_lower for k in ("gmail_connect", "oauth", "connect", "authorize", "login", "auth")):
+            return 180.0
+        elif any(k in name_lower for k in ("multi_agent", "coding_execute", "test")):
             return 60.0
         elif any(k in name_lower for k in ("research", "coding", "code", "run_command", "shell")):
             return 45.0
-        elif any(k in name_lower for k in ("music", "browser", "vision", "camera", "web", "scrape", "search")):
+        elif any(k in name_lower for k in ("email", "gmail", "inbox", "mail")):
+            return 35.0
+        elif any(k in name_lower for k in ("music", "browser", "vision", "camera", "web", "scrape", "search", "finance", "receipt")):
             return 30.0
         elif any(k in name_lower for k in ("phone", "contacts", "sms", "whatsapp", "call")):
             return 20.0

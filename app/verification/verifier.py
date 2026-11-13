@@ -133,6 +133,22 @@ class ResultVerifier:
                 is_deterministic=True,
             )
 
+        # 5b. Autonomous Email Assistant Tools Verification
+        if name_lower.startswith("email_") or name_lower.startswith("gmail_"):
+            if res_str.lower().startswith("error:") or "approval required" in res_str.lower():
+                return VerificationResult(
+                    verified=False,
+                    status=VerificationStatus.FAILED,
+                    details="Email assistant reported an error or requires confirmation.",
+                    is_deterministic=True,
+                )
+            return VerificationResult(
+                verified=True,
+                status=VerificationStatus.SUCCESS,
+                details="Email assistant action completed.",
+                is_deterministic=True,
+            )
+
         # 6. Generic Error Checks
         if isinstance(raw_result, Exception) or res_str.lower().startswith("error:"):
             return VerificationResult(

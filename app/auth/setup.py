@@ -1,5 +1,5 @@
 """
-Setup / provisioning utility for Victor 2.0 authentication credentials.
+Setup / provisioning utility for Victor authentication credentials.
 
 Usage:
     python -m app.auth.setup --pin 1234
@@ -52,7 +52,7 @@ def configure_credentials(phrase: str, auth_mode: str = "pin", secrets_path: str
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Configure Victor 2.0 authentication credentials.")
+    parser = argparse.ArgumentParser(description="Configure Victor authentication credentials.")
     parser.add_argument("--pin", type=str, help="PIN code to configure (digits only).")
     parser.add_argument("--passphrase", type=str, help="Passphrase to configure.")
     parser.add_argument("--path", type=str, help="Custom secrets.yaml file path.")
@@ -67,7 +67,7 @@ def main() -> None:
         configure_credentials(args.passphrase, auth_mode="passphrase", secrets_path=args.path)
     else:
         # Interactive mode
-        print(f"=== Victor 2.0 Credential Setup (Mode: {auth_mode}) ===")
+        print(f"=== Victor Credential Setup (Mode: {auth_mode}) ===")
         if auth_mode == "pin":
             entered = getpass.getpass("Enter new PIN (digits only): ").strip()
             confirm = getpass.getpass("Confirm new PIN: ").strip()

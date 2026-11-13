@@ -1,5 +1,5 @@
 """
-Base architecture for Google Services Automation in Victor 2.0.
+Base architecture for Google Services Automation in Victor.
 
 Provides an extensible foundation for controlling Google web applications
 (Google Keep, Calendar, Meet, and future services such as Gmail, Drive, Docs, etc.)

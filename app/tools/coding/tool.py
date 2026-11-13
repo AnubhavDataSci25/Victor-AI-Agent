@@ -1,5 +1,5 @@
 """
-Victor 2.0 BaseTool implementations for Coding Computer Control.
+Victor BaseTool implementations for Coding Computer Control.
 
 Exposes workspace resolution, structured multi-step coding task execution,
 controlled project terminal commands, and workspace status reporting.

@@ -1,5 +1,5 @@
 """
-Victor 2.0 BaseTool implementations for Phone Integration V1.
+Victor BaseTool implementations for Phone Integration V1.
 All phone actions delegate directly to the deterministic PhoneGateway.
 """
 

@@ -1,5 +1,5 @@
 """
-Unit tests for Victor 2.0 tools, computer tools, and factory shim.
+Unit tests for Victor tools, computer tools, and factory shim.
 """
 
 from pathlib import Path

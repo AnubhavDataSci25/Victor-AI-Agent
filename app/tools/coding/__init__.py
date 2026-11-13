@@ -1,5 +1,5 @@
 """
-Coding tools package for Victor 2.0.
+Coding tools package for Victor.
 """
 
 from app.tools.coding.tool import (

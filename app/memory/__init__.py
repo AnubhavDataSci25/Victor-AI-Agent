@@ -1,5 +1,5 @@
 """
-Memory & Context Manager module for Victor 2.0.
+Memory & Context Manager module for Victor.
 """
 
 from app.memory.manager import MemoryManager

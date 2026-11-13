@@ -1,5 +1,5 @@
 """
-Unit tests for Victor 2.0 authentication and secret store.
+Unit tests for Victor authentication and secret store.
 """
 
 import tempfile

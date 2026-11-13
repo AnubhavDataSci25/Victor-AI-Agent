@@ -1,5 +1,5 @@
 """
-Comprehensive unit tests for Victor 2.0 Windows Hello fingerprint 2FA authentication.
+Comprehensive unit tests for Victor Windows Hello fingerprint 2FA authentication.
 
 Test suite covers:
 1. Successful 2FA authentication (PIN -> BIOMETRIC_PENDING -> Fingerprint VERIFIED -> ACTIVE)

@@ -1,5 +1,5 @@
 """
-Coding Computer Controller for Victor 2.0.
+Coding Computer Controller for Victor.
 
 Coordinates the complete coding lifecycle:
 Understand Path -> Inspect Project -> Plan -> Confirm if Needed ->
