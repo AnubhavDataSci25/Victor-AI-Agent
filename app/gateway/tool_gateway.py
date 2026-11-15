@@ -351,7 +351,8 @@ class ToolGateway:
         elif any(k in name_lower for k in (
             "browser", "web", "search", "research", "scrape", "url", "story",
             "current_affairs", "google_keep", "google_calendar", "google_meet",
-            "webapp", "open_story", "screen", "vision", "camera", "receipt", "scan"
+            "webapp", "open_story", "screen", "vision", "camera", "receipt", "scan",
+            "document", "rag", "summarize", "compare", "notes", "excel"
         )):
             return 60.0
         # Email & messaging operations (IMAP / SMTP / Gmail API fetching & composing): 45 seconds

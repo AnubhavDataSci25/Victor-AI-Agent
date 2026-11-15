@@ -429,6 +429,30 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     except Exception as e:
         logger.warning(f"Finance tools unavailable: {e}")
 
+    # --- Document Intelligence & Conversational RAG Tools ---
+    try:
+        from app.tools.rag.document_tools import (
+            DocumentCompareTool,
+            DocumentExcelQueryTool,
+            DocumentListLibraryTool,
+            DocumentReadAndExplainTool,
+            DocumentRevisionNotesTool,
+            DocumentSearchAndQueryTool,
+            DocumentSummarizeTool,
+            DocumentVoiceUploadAndSummarizeTool,
+        )
+        registry.register(DocumentReadAndExplainTool())
+        registry.register(DocumentSearchAndQueryTool())
+        registry.register(DocumentCompareTool())
+        registry.register(DocumentSummarizeTool())
+        registry.register(DocumentRevisionNotesTool())
+        registry.register(DocumentExcelQueryTool())
+        registry.register(DocumentListLibraryTool())
+        registry.register(DocumentVoiceUploadAndSummarizeTool())
+        logger.info("Registered Document Intelligence & RAG tools.")
+    except Exception as e:
+        logger.warning(f"Document Intelligence & RAG tools unavailable: {e}")
+
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")
     return registry

@@ -233,6 +233,17 @@ class LiveSessionManager:
                         "To generate summaries or compare months, use finance_generate_report. "
                         "For natural language financial questions ('Can I afford...?', 'Why did I spend more this month?', 'How much on food?'), use finance_query. "
                         "Never fabricate financial numbers. All figures must come directly from verified tool results. "
+                        "For Conversational Document Intelligence & RAG: "
+                        "You can read, explain, summarize, compare, and query documents stored on Anubhav Sir's computer (PDF, Word docx, Excel xlsx, PowerPoint pptx, CSV, Text, Markdown, JSON). "
+                        "When the user asks to upload, analyze, or summarize a document by voice (e.g. 'Victor, analyse xyz.pdf file in downloads folder and give me summary', 'Upload and summarize report.pdf from desktop', 'Analyze sales.xlsx in downloads'), use document_voice_upload_and_summarize or document_read_and_explain. Pass the filename and any folder mention (downloads, desktop, documents); Victor will automatically locate the file, index it, generate the summary, display it on the dashboard, and speak it aloud. "
+                        "When the user asks to read, analyze, or explain a document (e.g. 'Read this PDF and explain its findings', 'Explain my research paper', 'What methodology did I use?'), use document_read_and_explain. "
+                        "To search across documents or answer questions using indexed knowledge with exact citations (page numbers, sections, slides, worksheets), use document_search_and_query. "
+                        "To compare two documents side by side (e.g. 'Compare these two Word documents' or 'Compare these research papers'), use document_compare. "
+                        "To summarize a document, use document_summarize. "
+                        "To generate revision notes, key concepts, or study guides, use document_generate_notes. "
+                        "For spreadsheets and numerical tables (Excel .xlsx, .xls, or CSV) where calculations are needed (e.g. 'How much total expenditure is in this Excel file?', 'What was the highest sale?', 'Average revenue'), ALWAYS use document_excel_query so calculations are performed deterministically with Python/pandas and never hallucinated. "
+                        "To list all documents currently indexed in Victor's library, use document_list_library. "
+                        "When answering from documents, always provide precise citations to pages, sections, slides, or worksheets. "
                         "The user can terminate the session by asking: 'lock yourself'."
                     )
                 )]

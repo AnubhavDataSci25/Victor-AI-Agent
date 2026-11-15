@@ -149,6 +149,10 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
                         <span class="sidebar-label">Finance &amp; Bills</span>
                     </button>
+                    <button class="sidebar-item" data-view="documents" type="button" title="Document Intelligence & Conversational RAG">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                        <span class="sidebar-label">Document RAG</span>
+                    </button>
                     <button class="sidebar-item" data-view="agents" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                         <span class="sidebar-label">Agents (Multi)</span>
@@ -160,23 +164,50 @@
                     </button>
                 </nav>
 
-                <!-- Subtle Futuristic Mountain / Ridge Illustration -->
+                <!-- Subtle Futuristic Curvy Mountain / Cyber Ridge Illustration -->
                 <div class="sidebar-mountain-art" aria-hidden="true">
                     <svg viewBox="0 0 240 110" preserveAspectRatio="none">
                         <defs>
-                            <linearGradient id="mtnGrad1" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stop-color="#087BFF" stop-opacity="0.45"/>
+                            <linearGradient id="mtnGradBack" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#087BFF" stop-opacity="0.35"/>
+                                <stop offset="50%" stop-color="#064089" stop-opacity="0.2"/>
                                 <stop offset="100%" stop-color="#020817" stop-opacity="0.95"/>
                             </linearGradient>
-                            <linearGradient id="mtnGlow" x1="0" y1="0" x2="1" y2="0">
-                                <stop offset="0%" stop-color="#087BFF" stop-opacity="0.1"/>
-                                <stop offset="50%" stop-color="#00D9FF" stop-opacity="0.85"/>
-                                <stop offset="100%" stop-color="#7855FF" stop-opacity="0.2"/>
+                            <linearGradient id="mtnGradFront" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#00D9FF" stop-opacity="0.25"/>
+                                <stop offset="40%" stop-color="#087BFF" stop-opacity="0.4"/>
+                                <stop offset="100%" stop-color="#020817" stop-opacity="0.98"/>
                             </linearGradient>
+                            <linearGradient id="mtnCurvyGlow" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stop-color="#087BFF" stop-opacity="0.3"/>
+                                <stop offset="35%" stop-color="#00D9FF" stop-opacity="0.95"/>
+                                <stop offset="70%" stop-color="#7855FF" stop-opacity="0.8"/>
+                                <stop offset="100%" stop-color="#00D9FF" stop-opacity="0.4"/>
+                            </linearGradient>
+                            <linearGradient id="waveLineGrad" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stop-color="#00D9FF" stop-opacity="0.1"/>
+                                <stop offset="50%" stop-color="#00D9FF" stop-opacity="0.75"/>
+                                <stop offset="100%" stop-color="#7855FF" stop-opacity="0.3"/>
+                            </linearGradient>
+                            <filter id="mtnSoftGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                <feGaussianBlur stdDeviation="1.5" result="blur" />
+                                <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
                         </defs>
-                        <path d="M0 95 L52 44 L94 74 L144 26 L194 68 L240 48 L240 110 L0 110 Z" fill="url(#mtnGrad1)"/>
-                        <path d="M0 95 L52 44 L94 74 L144 26 L194 68 L240 48" fill="none" stroke="url(#mtnGlow)" stroke-width="1.5"/>
-                        <path d="M0 105 Q120 82 240 102" fill="none" stroke="#00D9FF" stroke-opacity="0.35" stroke-width="1.2"/>
+                        <!-- Layer 1: Background distant curvy mountain ridge -->
+                        <path d="M0 88 C40 68, 70 34, 115 48 C155 60, 185 22, 240 44 L240 110 L0 110 Z" fill="url(#mtnGradBack)"/>
+                        <path d="M0 88 C40 68, 70 34, 115 48 C155 60, 185 22, 240 44" fill="none" stroke="rgba(0, 217, 255, 0.35)" stroke-width="1.2"/>
+
+                        <!-- Layer 2: Main midground curvy mountain with flowing contours -->
+                        <path d="M0 96 C30 84, 55 58, 90 56 C125 54, 145 74, 180 54 C205 38, 222 46, 240 52 L240 110 L0 110 Z" fill="url(#mtnGradFront)"/>
+                        <path d="M0 96 C30 84, 55 58, 90 56 C125 54, 145 74, 180 54 C205 38, 222 46, 240 52" fill="none" stroke="url(#mtnCurvyGlow)" stroke-width="1.8" filter="url(#mtnSoftGlow)"/>
+
+                        <!-- Layer 3: Smooth flowing cyber contour waves -->
+                        <path d="M0 102 C45 92, 85 74, 135 80 C185 86, 215 70, 240 74" fill="none" stroke="url(#waveLineGrad)" stroke-width="1.4"/>
+                        <path d="M0 107 C60 100, 120 88, 180 94 C210 98, 230 92, 240 93" fill="none" stroke="rgba(120, 85, 255, 0.4)" stroke-width="1.0"/>
                     </svg>
                 </div>
             </aside>
@@ -766,6 +797,196 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- ================================================================
+                     VICTOR DOCUMENT INTELLIGENCE & CONVERSATIONAL RAG COMMAND CENTER
+                     ================================================================ -->
+                <section id="documentDashboardView" class="document-dashboard-view hidden" aria-label="Document RAG Command Center">
+                    <header class="doc-dashboard-header">
+                        <div class="doc-header-main">
+                            <div class="doc-title-group">
+                                <div class="doc-badge-live"><span class="doc-pulse-dot"></span> RAG ACTIVE</div>
+                                <h2 class="doc-main-title">DOCUMENT INTELLIGENCE &amp; RAG</h2>
+                                <p class="doc-sub-title">Conversational Retrieval, Numerical Spreadsheet Intelligence &amp; Multi-Document Synthesis</p>
+                            </div>
+                            <div class="doc-header-actions">
+                                <button id="docOpenUploadBtn" class="doc-btn doc-btn-cyan" type="button" onclick="DocumentDashboard.openUploadModal()">
+                                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                    <span>Upload Document</span>
+                                </button>
+                                <button id="docOpenPathBtn" class="doc-btn doc-btn-primary" type="button" onclick="DocumentDashboard.openPathModal()">
+                                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                                    <span>Index Local Path</span>
+                                </button>
+                                <button class="doc-btn doc-btn-icon" title="Refresh Documents" type="button" onclick="DocumentDashboard.loadDocuments()">
+                                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                </button>
+                                <button id="docCloseBtn" class="doc-btn doc-btn-ghost" type="button" title="Return to Orb Dashboard" onclick="openModuleView('dashboard')">
+                                    <span>Return to Orb ✕</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- KPI Summary Row -->
+                        <div class="doc-stats-grid">
+                            <div class="glass-card doc-stat-card">
+                                <div class="doc-stat-label">TOTAL DOCUMENTS</div>
+                                <div class="doc-stat-value" id="docStatTotalCount">0</div>
+                                <div class="doc-stat-sub">PDF, DOCX, XLSX, PPTX, CSV, TXT</div>
+                            </div>
+                            <div class="glass-card doc-stat-card">
+                                <div class="doc-stat-label">VECTOR CHUNKS</div>
+                                <div class="doc-stat-value" id="docStatTotalChunks">0</div>
+                                <div class="doc-stat-sub">Persistent FAISS Index</div>
+                            </div>
+                            <div class="glass-card doc-stat-card">
+                                <div class="doc-stat-label">INDEXED STORAGE</div>
+                                <div class="doc-stat-value" id="docStatTotalSize">0 MB</div>
+                                <div class="doc-stat-sub">SQLite WAL Metadata</div>
+                            </div>
+                            <div class="glass-card doc-stat-card">
+                                <div class="doc-stat-label">ACTIVE WORKING CONTEXT</div>
+                                <div class="doc-stat-value doc-stat-active" id="docStatActiveDoc">None selected</div>
+                                <div class="doc-stat-sub">Multi-turn follow-up tracking</div>
+                            </div>
+                        </div>
+
+                        <!-- Document Navigation Tabs -->
+                        <nav class="doc-nav-tabs" role="tablist">
+                            <button class="doc-tab-btn active" data-tab="library" type="button" role="tab">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                                <span>Document Library</span>
+                            </button>
+                            <button class="doc-tab-btn" data-tab="qa" type="button" role="tab">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <span>Conversational RAG (Q&amp;A)</span>
+                            </button>
+                            <button class="doc-tab-btn" data-tab="excel" type="button" role="tab">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+                                <span>Spreadsheet Intelligence</span>
+                            </button>
+                            <button class="doc-tab-btn" data-tab="compare" type="button" role="tab">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                                <span>Compare Documents</span>
+                            </button>
+                            <button class="doc-tab-btn" data-tab="notes" type="button" role="tab">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                                <span>Study Notes &amp; Summary</span>
+                            </button>
+                        </nav>
+                    </header>
+
+                    <div class="doc-dashboard-content">
+                        <!-- Tab 1: Library -->
+                        <div id="docTab-library" class="doc-tab-pane active">
+                            <div class="glass-card doc-panel">
+                                <div class="doc-panel-header">
+                                    <div class="doc-panel-title">Indexed Documents</div>
+                                </div>
+                                <div class="doc-table-wrapper">
+                                    <table class="doc-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Document</th>
+                                                <th>Collection</th>
+                                                <th>Pages/Sheets</th>
+                                                <th>Chunks</th>
+                                                <th>Size</th>
+                                                <th>Status</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="docLibraryTableBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 2: Conversational RAG Q&A -->
+                        <div id="docTab-qa" class="doc-tab-pane">
+                            <div class="glass-card doc-qa-container">
+                                <div class="doc-qa-chat-box" id="docQueryResults">
+                                    <div class="doc-chat-bubble doc-chat-ai">
+                                        <div class="doc-chat-meta">
+                                            <span class="meta-provider">Victor RAG Engine</span>
+                                        </div>
+                                        <div class="doc-chat-text">
+                                            Sir, you can ask questions across all your indexed documents or query specific files. Every answer will be strictly grounded with source citations.
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="doc-qa-input-bar">
+                                    <input type="text" id="docQueryInput" class="doc-qa-input" placeholder="Ask a question about your documents, research, or data...">
+                                    <button class="doc-btn doc-btn-cyan" type="button" onclick="DocumentDashboard.sendQuery()">
+                                        <span>Ask Victor</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 3: Spreadsheet Intelligence -->
+                        <div id="docTab-excel" class="doc-tab-pane">
+                            <div class="glass-card doc-panel">
+                                <div class="doc-panel-header">
+                                    <div class="doc-panel-title">Deterministic Numerical Spreadsheet Intelligence</div>
+                                </div>
+                                <div class="doc-tool-form">
+                                    <div class="doc-form-row">
+                                        <label class="doc-form-label">Target Spreadsheet:</label>
+                                        <select id="docExcelDocSelect" class="doc-select"></select>
+                                    </div>
+                                    <div class="doc-form-row">
+                                        <label class="doc-form-label">Calculation Question / Instruction:</label>
+                                        <input type="text" id="docExcelQueryInput" class="doc-input" placeholder="e.g. Total expenditure in Sheet1, or average sales">
+                                        <button class="doc-btn doc-btn-primary" type="button" onclick="DocumentDashboard.calculateExcelQuery()">Calculate</button>
+                                    </div>
+                                </div>
+                                <div id="docExcelOutput" class="doc-output-area"></div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 4: Compare Documents -->
+                        <div id="docTab-compare" class="doc-tab-pane">
+                            <div class="glass-card doc-panel">
+                                <div class="doc-panel-header">
+                                    <div class="doc-panel-title">Side-by-Side Document Comparison</div>
+                                </div>
+                                <div class="doc-tool-form">
+                                    <div class="doc-form-grid-2">
+                                        <div class="doc-form-group">
+                                            <label class="doc-form-label">Document 1:</label>
+                                            <select id="docCompareDoc1" class="doc-select"></select>
+                                        </div>
+                                        <div class="doc-form-group">
+                                            <label class="doc-form-label">Document 2:</label>
+                                            <select id="docCompareDoc2" class="doc-select"></select>
+                                        </div>
+                                    </div>
+                                    <button class="doc-btn doc-btn-primary" type="button" onclick="DocumentDashboard.submitCompare()">Run Comparative Analysis</button>
+                                </div>
+                                <div id="docCompareOutput" class="doc-output-area"></div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 5: Study Notes & Summary -->
+                        <div id="docTab-notes" class="doc-tab-pane">
+                            <div class="glass-card doc-panel">
+                                <div class="doc-panel-header">
+                                    <div class="doc-panel-title">Document Synthesis &amp; Study Notes</div>
+                                </div>
+                                <div class="doc-tool-form">
+                                    <div class="doc-form-row">
+                                        <label class="doc-form-label">Select Document:</label>
+                                        <select id="docNotesDocSelect" class="doc-select"></select>
+                                        <button class="doc-btn doc-btn-primary" type="button" onclick="DocumentDashboard.generateSummary()">Executive Summary</button>
+                                        <button class="doc-btn doc-btn-cyan" type="button" onclick="DocumentDashboard.generateRevisionNotes()">Key Concepts &amp; Notes</button>
+                                    </div>
+                                </div>
+                                <div id="docNotesOutput" class="doc-output-area"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </main>
         </div>
 
@@ -1104,10 +1325,64 @@
         </div>
     </div>
 
+    <!-- ================================================================
+         DOCUMENT INTELLIGENCE & RAG MODALS
+         ================================================================ -->
+    <!-- 1. Upload Document Modal -->
+    <div id="docUploadModal" class="doc-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="docUploadModalTitle">
+        <div class="glass-card doc-modal-card">
+            <div class="doc-modal-header">
+                <h3 id="docUploadModalTitle" class="doc-modal-title">Upload &amp; Index Document</h3>
+                <button class="doc-modal-close" type="button" onclick="DocumentDashboard.closeUploadModal()">&times;</button>
+            </div>
+            <div class="doc-modal-body">
+                <div class="doc-form-group">
+                    <label class="doc-form-label">Select Document File:</label>
+                    <input type="file" id="docFileInput" class="doc-file-input" accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.csv,.txt,.md,.json">
+                    <span class="doc-hint">Supported: PDF, Word (.docx), Excel (.xlsx/.xls), PPTX, CSV, TXT, Markdown, JSON</span>
+                </div>
+                <div class="doc-form-group" style="margin-top: 1rem;">
+                    <label class="doc-form-label">Collection Target:</label>
+                    <input type="text" id="docUploadCollectionInput" class="doc-input" value="default" placeholder="default">
+                </div>
+                <div class="doc-modal-actions">
+                    <button type="button" class="doc-btn doc-btn-secondary" onclick="DocumentDashboard.closeUploadModal()">Cancel</button>
+                    <button type="button" id="docSubmitUploadBtn" class="doc-btn doc-btn-cyan" onclick="DocumentDashboard.submitUpload()">Upload &amp; Ingest</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Index Local Path Modal -->
+    <div id="docPathModal" class="doc-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="docPathModalTitle">
+        <div class="glass-card doc-modal-card">
+            <div class="doc-modal-header">
+                <h3 id="docPathModalTitle" class="doc-modal-title">Index Local File or Drive Path</h3>
+                <button class="doc-modal-close" type="button" onclick="DocumentDashboard.closePathModal()">&times;</button>
+            </div>
+            <div class="doc-modal-body">
+                <div class="doc-form-group">
+                    <label class="doc-form-label">Full Local File Path:</label>
+                    <input type="text" id="docPathInput" class="doc-input" placeholder="e.g. C:\Users\anu52\Documents\ResearchPaper.pdf">
+                    <span class="doc-hint">Ingests directly from your drive without copying. Incremental hashing prevents re-indexing if unchanged.</span>
+                </div>
+                <div class="doc-form-group" style="margin-top: 1rem;">
+                    <label class="doc-form-label">Collection Target:</label>
+                    <input type="text" id="docPathCollectionInput" class="doc-input" value="default" placeholder="default">
+                </div>
+                <div class="doc-modal-actions">
+                    <button type="button" class="doc-btn doc-btn-secondary" onclick="DocumentDashboard.closePathModal()">Cancel</button>
+                    <button type="button" id="docSubmitPathBtn" class="doc-btn doc-btn-primary" onclick="DocumentDashboard.submitPathIngest()">Index Document</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/static/orb/orb.js?v=3.0"></script>
     <script src="/static/app.js?v=3.0"></script>
     <script src="/static/finance_dashboard.js?v=1.0"></script>
+    <script src="/static/document_dashboard.js?v=1.0"></script>
 </body>
 </html>

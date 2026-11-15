@@ -143,18 +143,19 @@
             this.loadAll();
         },
 
-        hide() {
+        hide(restoreDashboard = true) {
             const view = document.getElementById('financeDashboardView');
             const grid = document.querySelector('.hud-command-grid');
             const quickActions = document.querySelector('.quick-actions-bar');
 
             if (view) view.classList.add('hidden');
-            if (grid) grid.classList.remove('hidden');
-            if (quickActions) quickActions.classList.remove('hidden');
-
-            document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
-                b.classList.toggle('is-active', b.dataset.view === 'dashboard');
-            });
+            if (restoreDashboard) {
+                if (grid) grid.classList.remove('hidden');
+                if (quickActions) quickActions.classList.remove('hidden');
+                document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
+                    b.classList.toggle('is-active', b.dataset.view === 'dashboard');
+                });
+            }
         },
 
         switchTab(tabName) {

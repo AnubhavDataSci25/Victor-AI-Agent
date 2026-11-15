@@ -1,0 +1,19 @@
+{
+  "dimension": 4,
+  "ntotal": 3,
+  "id_to_chunk": {
+    "0": "c1",
+    "1": "c2",
+    "2": "c3"
+  },
+  "chunk_to_id": {
+    "c1": 0,
+    "c2": 1,
+    "c3": 2
+  },
+  "chunk_to_doc": {
+    "c1": "doc1",
+    "c2": "doc1",
+    "c3": "doc1"
+  }
+}

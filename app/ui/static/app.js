@@ -1154,10 +1154,16 @@ ws.onmessage = (event) => {
         } else if (message.type === "dashboard_navigate") {
             if (message.section === "finance" && window.FinanceDashboard) {
                 window.FinanceDashboard.handleNavigation(message.tab, message.filters);
+            } else if (message.section === "documents" && window.DocumentDashboard) {
+                window.DocumentDashboard.handleNavigation(message.tab, message);
             }
         } else if (message.type === "finance_update") {
             if (window.FinanceDashboard) {
                 window.FinanceDashboard.handleUpdate(message);
+            }
+        } else if (message.type === "document_update" || message.type === "rag_update") {
+            if (window.DocumentDashboard) {
+                window.DocumentDashboard.handleUpdate(message);
             }
         }
     } catch (e) {
@@ -1564,16 +1570,32 @@ function openModuleView(viewKey) {
         btn.classList.toggle('is-active', btn.dataset.view === viewKey);
     });
 
+    const grid = document.querySelector('.hud-command-grid');
+    const quickActions = document.querySelector('.quick-actions-bar');
+
     if (viewKey === 'finance') {
         if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        if (window.DocumentDashboard) window.DocumentDashboard.hide(false);
         if (window.FinanceDashboard) {
             window.FinanceDashboard.show();
         }
         return;
+    } else if (viewKey === 'documents') {
+        if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        if (window.FinanceDashboard) window.FinanceDashboard.hide(false);
+        if (window.DocumentDashboard) {
+            window.DocumentDashboard.show();
+        }
+        return;
     } else {
         if (window.FinanceDashboard) {
-            window.FinanceDashboard.hide();
+            window.FinanceDashboard.hide(false);
         }
+        if (window.DocumentDashboard) {
+            window.DocumentDashboard.hide(false);
+        }
+        if (grid) grid.classList.remove('hidden');
+        if (quickActions) quickActions.classList.remove('hidden');
     }
 
     if (viewKey === 'dashboard' || !MODULE_DEFINITIONS[viewKey]) {

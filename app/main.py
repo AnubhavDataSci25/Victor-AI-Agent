@@ -36,12 +36,16 @@ app = FastAPI(title="Victor API")
 from app.reminders.scheduler import get_global_reminder_scheduler
 from app.finance.api import router as finance_router
 from app.finance.events import register_ui_listener, unregister_ui_listener, set_finance_event_loop
+from app.rag.events import register_ui_listener as register_rag_ui_listener, unregister_ui_listener as unregister_rag_ui_listener, set_rag_event_loop
+from app.rag.api import router as rag_router
 
 app.include_router(finance_router)
+app.include_router(rag_router)
 
 @app.on_event("startup")
 async def startup_event():
     set_finance_event_loop(asyncio.get_running_loop())
+    set_rag_event_loop(asyncio.get_running_loop())
     scheduler = get_global_reminder_scheduler()
 
     async def _scheduled_email_tick():
@@ -253,6 +257,7 @@ async def websocket_endpoint(websocket: WebSocket):
     
     # Register UI listener for real-time finance synchronization
     register_ui_listener(ws_send)
+    register_rag_ui_listener(ws_send)
 
     try:
         while True:
@@ -334,6 +339,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await session_manager.lock()
     finally:
         unregister_ui_listener(ws_send)
+        unregister_rag_ui_listener(ws_send)
 
 
 if __name__ == "__main__":
