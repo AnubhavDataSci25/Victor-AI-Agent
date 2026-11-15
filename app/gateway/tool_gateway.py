@@ -341,19 +341,30 @@ class ToolGateway:
             return float(tool.timeout_seconds)
 
         name_lower = tool_name.lower()
+        # OAuth / User Login / Account Authorization: Allow up to 3 minutes
         if any(k in name_lower for k in ("gmail_connect", "oauth", "connect", "authorize", "login", "auth")):
             return 180.0
-        elif any(k in name_lower for k in ("multi_agent", "coding_execute", "test")):
+        # Multi-agent software planning, project generation, and code execution: 90 seconds
+        elif any(k in name_lower for k in ("multi_agent", "coding_execute", "project_plan", "execute_code", "build")):
+            return 90.0
+        # Browser, web navigation, webapps, news stories, research, and Google services: 60 seconds
+        elif any(k in name_lower for k in (
+            "browser", "web", "search", "research", "scrape", "url", "story",
+            "current_affairs", "google_keep", "google_calendar", "google_meet",
+            "webapp", "open_story", "screen", "vision", "camera", "receipt", "scan"
+        )):
             return 60.0
-        elif any(k in name_lower for k in ("research", "coding", "code", "run_command", "shell")):
+        # Email & messaging operations (IMAP / SMTP / Gmail API fetching & composing): 45 seconds
+        elif any(k in name_lower for k in ("email", "gmail", "inbox", "mail", "draft", "compose")):
             return 45.0
-        elif any(k in name_lower for k in ("email", "gmail", "inbox", "mail")):
-            return 35.0
-        elif any(k in name_lower for k in ("music", "browser", "vision", "camera", "web", "scrape", "search", "finance", "receipt")):
-            return 30.0
+        # Phone companion & device communication: 30 seconds
         elif any(k in name_lower for k in ("phone", "contacts", "sms", "whatsapp", "call")):
-            return 20.0
-        return 15.0
+            return 30.0
+        # Finance analysis, reports, and reminders: 30 seconds
+        elif any(k in name_lower for k in ("finance", "report", "budget", "reminder")):
+            return 30.0
+        # General baseline for all other tools: 45 seconds (never a brittle 15s)
+        return 45.0
 
     async def execute_function_call(
         self,
@@ -386,11 +397,11 @@ class ToolGateway:
                 id=call_id,
                 response={
                     "result": (
-                        f"Execution timed out: Tool '{tool_name}' did not complete within {effective_timeout} seconds. "
-                        "Do NOT retry this tool call immediately. "
-                        f"Verbally explain to the user that {tool_name} timed out, and ask how they would like to proceed."
+                        f"Execution timed out: Tool '{tool_name}' took longer than {int(effective_timeout)} seconds to complete. "
+                        "The system was loading external web pages or background services. "
+                        f"Please explain to the user that {tool_name} took longer than expected, and ask if they would like to try again or proceed with something else."
                     ),
-                    "error": f"Tool '{tool_name}' timed out after {effective_timeout}s",
+                    "error": f"Tool '{tool_name}' timed out after {int(effective_timeout)}s",
                     "status": "failed",
                 },
             )

@@ -34,9 +34,14 @@ _STATIC_DIR = _PROJECT_ROOT / "app" / "ui" / "static"
 app = FastAPI(title="Victor API")
 
 from app.reminders.scheduler import get_global_reminder_scheduler
+from app.finance.api import router as finance_router
+from app.finance.events import register_ui_listener, unregister_ui_listener, set_finance_event_loop
+
+app.include_router(finance_router)
 
 @app.on_event("startup")
 async def startup_event():
+    set_finance_event_loop(asyncio.get_running_loop())
     scheduler = get_global_reminder_scheduler()
 
     async def _scheduled_email_tick():
@@ -246,6 +251,9 @@ async def websocket_endpoint(websocket: WebSocket):
         **phone_status,
     })
     
+    # Register UI listener for real-time finance synchronization
+    register_ui_listener(ws_send)
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -257,7 +265,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 await ws_send({"type": "auth_result", "success": success, "message": message})
                 
             elif msg_type == "audio_input":
-                if session_manager.state in (VictorState.ACTIVE, VictorState.BIOMETRIC_PENDING):
+                if session_manager.state in (
+                    VictorState.ACTIVE,
+                    VictorState.LISTENING,
+                    VictorState.WAITING_FOR_CONTINUATION,
+                    VictorState.BIOMETRIC_PENDING,
+                ):
                     pcm_chunk = base64.b64decode(payload.get("data", ""))
                     await session_manager.handle_audio_input(pcm_chunk)
 
@@ -319,6 +332,8 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("Browser disconnected.")
         await session_manager.lock()
+    finally:
+        unregister_ui_listener(ws_send)
 
 
 if __name__ == "__main__":

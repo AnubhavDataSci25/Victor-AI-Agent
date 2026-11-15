@@ -406,6 +406,7 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
             FinanceManageBillTool,
             FinanceManageBudgetTool,
             FinanceManageSubscriptionTool,
+            FinanceNavigateDashboardTool,
             FinancePayBillTool,
             FinanceQueryTool,
             FinanceRecordTransactionTool,
@@ -421,6 +422,7 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
         registry.register(FinancePayBillTool())
         registry.register(FinanceManageBudgetTool())
         registry.register(FinanceManageSubscriptionTool())
+        registry.register(FinanceNavigateDashboardTool())
         registry.register(FinanceGenerateReportTool())
         registry.register(FinanceQueryTool())
         logger.info("Registered Personal Finance & Bill Management tools.")

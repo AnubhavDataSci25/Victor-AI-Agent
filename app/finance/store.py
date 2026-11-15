@@ -186,6 +186,48 @@ class FinanceStore:
                         (cat, f"Default category for {cat}", now),
                     )
 
+            # Migrate legacy 'txn_%' IDs to standard monthly format (e.g. NOVT001)
+            cursor.execute(
+                "SELECT transaction_id, transaction_date, created_at FROM transactions WHERE transaction_id LIKE 'txn_%' ORDER BY transaction_date ASC, created_at ASC;"
+            )
+            legacy_rows = cursor.fetchall()
+            if legacy_rows:
+                logger.info(f"[FinanceStore] Migrating {len(legacy_rows)} legacy transaction IDs to monthly format...")
+                for row in legacy_rows:
+                    old_id = row["transaction_id"]
+                    t_date = row["transaction_date"]
+                    dt = None
+                    try:
+                        date_str = str(t_date).strip().replace("Z", "+00:00")
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+                            try:
+                                dt = datetime.datetime.strptime(date_str[:19], fmt)
+                                break
+                            except Exception:
+                                continue
+                        if dt is None:
+                            dt = datetime.datetime.fromisoformat(date_str)
+                    except Exception:
+                        dt = datetime.datetime.now()
+
+                    m_abbr = dt.strftime("%b").upper()
+                    m_pfx = f"{m_abbr}T"
+
+                    cursor.execute(
+                        "SELECT transaction_id FROM transactions WHERE UPPER(transaction_id) LIKE ?;",
+                        (f"{m_pfx}%",)
+                    )
+                    existing = [r[0].upper().strip() for r in cursor.fetchall() if not r[0].startswith("txn_")]
+                    m_nums = [int(x[len(m_pfx):]) for x in existing if x[len(m_pfx):].isdigit()]
+                    nxt = max(m_nums) + 1 if m_nums else 1
+                    new_id = f"{m_pfx}{nxt:03d}"
+
+                    cursor.execute(
+                        "UPDATE transactions SET transaction_id = ? WHERE transaction_id = ?;",
+                        (new_id, old_id)
+                    )
+                    logger.info(f"[FinanceStore] Migrated transaction {old_id} -> {new_id}")
+
             conn.commit()
 
     # =========================================================================
@@ -213,6 +255,65 @@ class FinanceStore:
     # =========================================================================
     # TRANSACTIONS
     # =========================================================================
+    def generate_next_transaction_id(self, date_str: Optional[str] = None) -> str:
+        """
+        Generates a unique monthly formatted transaction ID:
+        e.g., 'NOVT001', containing Month abbreviation ('NOV'), 'T' (Transaction),
+        and the 3-digit transaction sequence number of that specific month ('001').
+        """
+        dt = None
+        if date_str:
+            date_cleaned = str(date_str).strip().replace("Z", "+00:00")
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.datetime.strptime(date_cleaned[:19], fmt)
+                    break
+                except Exception:
+                    continue
+            if dt is None:
+                try:
+                    dt = datetime.datetime.fromisoformat(date_cleaned)
+                except Exception:
+                    pass
+        if dt is None:
+            dt = datetime.datetime.now()
+
+        month_abbr = dt.strftime("%b").upper()
+        prefix = f"{month_abbr}T"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT transaction_id FROM transactions WHERE UPPER(transaction_id) LIKE ?;",
+                (f"{prefix}%",),
+            )
+            rows = cursor.fetchall()
+
+            max_num = 0
+            for row in rows:
+                tid = str(row["transaction_id"]).upper().strip()
+                suffix = tid[len(prefix):]
+                if suffix.isdigit():
+                    num = int(suffix)
+                    if num > max_num:
+                        max_num = num
+
+            next_num = max_num + 1
+            cand_id = f"{prefix}{next_num:03d}"
+
+            # Safety against race/collision
+            while True:
+                cursor.execute(
+                    "SELECT 1 FROM transactions WHERE UPPER(transaction_id) = UPPER(?);",
+                    (cand_id,),
+                )
+                if not cursor.fetchone():
+                    break
+                next_num += 1
+                cand_id = f"{prefix}{next_num:03d}"
+
+            return cand_id
+
     def add_transaction(self, txn: Transaction) -> str:
         if txn.amount <= 0:
             raise ValueError(f"Transaction amount must be strictly greater than 0, got {txn.amount}")
@@ -248,9 +349,12 @@ class FinanceStore:
         return txn.transaction_id
 
     def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
+        norm = (transaction_id or "").strip()
+        if not norm:
+            return None
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM transactions WHERE transaction_id = ?;", (transaction_id,))
+            cursor.execute("SELECT * FROM transactions WHERE LOWER(transaction_id) = LOWER(?);", (norm,))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -269,7 +373,7 @@ class FinanceStore:
                     transaction_type = ?, amount = ?, currency = ?, category = ?, subcategory = ?,
                     merchant_or_payee = ?, transaction_date = ?, payment_method = ?,
                     description = ?, receipt_ref = ?, updated_at = ?
-                WHERE transaction_id = ?;
+                WHERE LOWER(transaction_id) = LOWER(?);
                 """,
                 (
                     txn.transaction_type.value,
@@ -283,7 +387,7 @@ class FinanceStore:
                     txn.description,
                     txn.receipt_ref,
                     txn.updated_at,
-                    txn.transaction_id,
+                    txn.transaction_id.strip(),
                 ),
             )
             self._log_audit_conn(conn, "UPDATE", "TRANSACTION", txn.transaction_id, f"Updated amount to {txn.amount}")
@@ -291,14 +395,141 @@ class FinanceStore:
             return cursor.rowcount > 0
 
     def delete_transaction(self, transaction_id: str) -> bool:
+        norm = (transaction_id or "").strip()
+        if not norm:
+            return False
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM transactions WHERE transaction_id = ?;", (transaction_id,))
+            cursor.execute("DELETE FROM transactions WHERE LOWER(transaction_id) = LOWER(?);", (norm,))
             deleted = cursor.rowcount > 0
             if deleted:
-                self._log_audit_conn(conn, "DELETE", "TRANSACTION", transaction_id, "Deleted transaction")
+                self._log_audit_conn(conn, "DELETE", "TRANSACTION", norm, "Deleted transaction")
             conn.commit()
             return deleted
+
+    def find_transaction_to_delete(
+        self,
+        identifier: Optional[str] = None,
+        merchant: Optional[str] = None,
+        amount: Optional[float] = None,
+        category: Optional[str] = None,
+    ) -> Optional[Transaction]:
+        """
+        Intelligently resolves a transaction candidate for deletion across multiple strategies:
+        1. Exact or case-insensitive ID match (e.g. 'NOVT001', 'novt001').
+        2. Cleaned ID match (e.g. 'NOVT 001', 'NOVT-001', 'novt 1' -> 'NOVT001').
+        3. Numeric sequence match (e.g. '1', '001', '#1' -> matches current/recent month 'T001').
+        4. Relative keywords ('last', 'latest', 'recent').
+        5. Amount, merchant, and/or category matching against recent records.
+        """
+        raw_id = (identifier or "").strip()
+
+        # Strategy 1: Explicit relative keyword or empty without other filters
+        if raw_id.lower() in ("last", "latest", "recent") or (not raw_id and merchant is None and amount is None and category is None):
+            recent = self.list_transactions(limit=1)
+            return recent[0] if recent else None
+
+        # Strategy 2: Exact or case-insensitive ID check
+        if raw_id:
+            direct = self.get_transaction(raw_id)
+            if direct:
+                return direct
+
+            # Normalize spaces, hyphens, hashes: e.g. "NOVT 001" -> "NOVT001", "novt-1" -> "NOVT1"
+            clean = raw_id.replace(" ", "").replace("-", "").replace("#", "").upper()
+            direct = self.get_transaction(clean)
+            if direct:
+                return direct
+
+            # If user said "NOVT1" or "NOV T 1", pad numeric suffix: "NOVT1" -> "NOVT001"
+            import re
+            m = re.match(r"^([A-Z]{3}T)(\d+)$", clean)
+            if m:
+                pfx, num_part = m.group(1), m.group(2)
+                padded_id = f"{pfx}{int(num_part):03d}"
+                direct = self.get_transaction(padded_id)
+                if direct:
+                    return direct
+
+            # Strategy 3: Pure digits or "T" + digits: e.g. "1", "001", "T001", "T1"
+            digit_str = None
+            if clean.isdigit():
+                digit_str = clean
+            elif clean.startswith("T") and clean[1:].isdigit():
+                digit_str = clean[1:]
+
+            if digit_str:
+                target_suffix = f"T{int(digit_str):03d}"
+                # Search transactions ending with this suffix, ordered by transaction_date desc
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM transactions WHERE UPPER(transaction_id) LIKE ? ORDER BY transaction_date DESC, created_at DESC LIMIT 5;",
+                        (f"%{target_suffix}",),
+                    )
+                    rows = cursor.fetchall()
+                    if rows:
+                        return Transaction.from_dict(dict(rows[0]))
+
+            # Strategy 4: What if raw_id is actually an amount or merchant string mistakenly placed in identifier?
+            # E.g. raw_id = "350" or "350.00" or "₹350"
+            if amount is None:
+                cleaned_amt = raw_id.replace("₹", "").replace("Rs", "").replace("rs", "").replace(",", "").strip()
+                try:
+                    parsed_amt = float(cleaned_amt)
+                    if parsed_amt > 0:
+                        amount = parsed_amt
+                        raw_id = ""  # Cleared so it doesn't block merchant check
+                except ValueError:
+                    pass
+
+            # E.g. raw_id = "Auto wala" or "Biryani House" -> treat as merchant if not set
+            if raw_id and not merchant:
+                merchant = raw_id
+
+        # Strategy 5: Filter recent transactions by amount, merchant, and category
+        candidates = self.list_transactions(limit=50)
+
+        # Apply amount filter if specified (tolerance 0.05)
+        if amount is not None:
+            amt_val = float(amount)
+            candidates = [t for t in candidates if abs(t.amount - amt_val) < 0.05]
+
+        # Apply merchant / payee fuzzy/substring filter if specified
+        if merchant:
+            m_lower = merchant.lower().strip()
+            # Try exact/substring match on merchant_or_payee or description
+            m_matched = [
+                t for t in candidates
+                if m_lower in t.merchant_or_payee.lower() or m_lower in (t.description or "").lower()
+            ]
+            if m_matched:
+                candidates = m_matched
+            else:
+                # If no direct match in amount-filtered candidates, search across all recent transactions
+                all_recent = self.list_transactions(limit=50)
+                fallback_m = [
+                    t for t in all_recent
+                    if m_lower in t.merchant_or_payee.lower() or m_lower in (t.description or "").lower()
+                ]
+                if fallback_m:
+                    if amount is not None:
+                        # Find closest matching amount
+                        closest = min(fallback_m, key=lambda t: abs(t.amount - float(amount)))
+                        return closest
+                    return fallback_m[0]
+
+        # Apply category filter if specified
+        if category:
+            c_lower = category.lower().strip()
+            c_matched = [t for t in candidates if c_lower == t.category.lower()]
+            if c_matched:
+                candidates = c_matched
+
+        if candidates:
+            return candidates[0]
+
+        return None
 
     def list_transactions(
         self,
@@ -464,6 +695,16 @@ class FinanceStore:
             self._log_audit_conn(conn, "UPDATE", "BILL", bill.bill_id, f"Updated bill {bill.bill_id} status={bill.status.value}")
             conn.commit()
             return cursor.rowcount > 0
+
+    def delete_bill(self, bill_id: str) -> bool:
+        """Deletes a bill record from persistent storage."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bills WHERE bill_id = ?;", (bill_id,))
+            deleted = cursor.rowcount > 0
+            if deleted:
+                self._log_audit_conn(conn, "DELETE", "BILL", bill_id, f"Deleted bill {bill_id}")
+            return deleted
 
     def mark_bill_paid(
         self,
@@ -730,6 +971,16 @@ class FinanceStore:
             cursor = conn.cursor()
             cursor.execute(query, params)
             return [Subscription.from_dict(dict(row)) for row in cursor.fetchall()]
+
+    def delete_subscription(self, subscription_id: str) -> bool:
+        """Deletes a tracked subscription from persistent storage."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM subscriptions WHERE subscription_id = ?;", (subscription_id,))
+            deleted = cursor.rowcount > 0
+            if deleted:
+                self._log_audit_conn(conn, "DELETE", "SUBSCRIPTION", subscription_id, f"Deleted subscription {subscription_id}")
+            return deleted
 
     # =========================================================================
     # RECEIPTS & DEDUPLICATION

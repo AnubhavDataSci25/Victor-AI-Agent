@@ -13,6 +13,7 @@ def _wrap_untrusted(content: str) -> str:
 
 class BrowserSearchWebTool(BaseTool):
     name = "browser_search_web"
+    timeout_seconds = 60.0
     description = "Searches the web for a query and returns the top snippets. Use this to find up-to-date factual information or news."
     parameters = {
         "type": "object",
@@ -42,6 +43,7 @@ class BrowserSearchWebTool(BaseTool):
 
 class BrowserOpenUrlTool(BaseTool):
     name = "browser_open_url"
+    timeout_seconds = 60.0
     description = "Opens a specific URL and returns the visible text content."
     parameters = {
         "type": "object",
@@ -70,6 +72,7 @@ class BrowserOpenUrlTool(BaseTool):
 
 class BrowserClickElementTool(BaseTool):
     name = "browser_click_element"
+    timeout_seconds = 45.0
     description = "Clicks a visible element on the current webpage containing the specified text."
     parameters = {
         "type": "object",
@@ -92,6 +95,7 @@ class BrowserClickElementTool(BaseTool):
 
 class BrowserOpenTabTool(BaseTool):
     name = "browser_open_tab"
+    timeout_seconds = 45.0
     description = (
         "Opens a new browser tab, optionally navigating to a specified URL. "
         "This is a safe operation that executes immediately without requiring user confirmation."

@@ -23,6 +23,7 @@ from app.finance.tools import (
     FinanceManageBillTool,
     FinanceManageBudgetTool,
     FinanceManageSubscriptionTool,
+    FinanceNavigateDashboardTool,
     FinancePayBillTool,
     FinanceQueryTool,
     FinanceRecordTransactionTool,
@@ -53,6 +54,7 @@ __all__ = [
     "FinancePayBillTool",
     "FinanceManageBudgetTool",
     "FinanceManageSubscriptionTool",
+    "FinanceNavigateDashboardTool",
     "FinanceGenerateReportTool",
     "FinanceQueryTool",
 ]

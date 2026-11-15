@@ -48,6 +48,7 @@ let mediaStream = null;
 let activeAudioSources = [];
 let firstCommandRecognizer = null;
 let currentUtterance = null; // Preserved in outer scope to prevent V8 GC bug with SpeechSynthesis
+let stateWatchdogTimer = null;
 
 // ==========================================================================
 // REAL-TIME CHRONO TELEMETRY (CLOCK & DATE)
@@ -136,40 +137,14 @@ async function startAudioPipeline() {
         const SILENCE_THRESHOLD = 0.0015;
 
         scriptProcessor.onaudioprocess = (e) => {
-            // Only stream during active conversation session; drop during tool execution or thinking
-            if (currentState !== "ACTIVE" && currentState !== "LISTENING" && currentState !== "SPEAKING") return;
-            if (currentState === "EXECUTING" || currentState === "THINKING") return;
+            // Stream during active conversational states; suppress during execution, thinking, or finalizing
+            if (currentState !== "ACTIVE" && currentState !== "LISTENING" && currentState !== "WAITING_FOR_CONTINUATION" && currentState !== "SPEECH_ACTIVE" && currentState !== "SPEAKING") return;
+            if (currentState === "EXECUTING" || currentState === "THINKING" || currentState === "FINALIZING") return;
 
             // Acoustic echo suppression & user mute: drop mic packets while muted or Victor is speaking
             if (isMicMuted || isVictorSpeaking || Date.now() < micMutedUntil) return;
 
             const inputData = e.inputBuffer.getChannelData(0);
-
-            // Silence gating + Hybrid VAD end-of-speech signaling + 25s keepalive
-            let sumSq = 0;
-            for (let i = 0; i < inputData.length; i++) {
-                sumSq += inputData[i] * inputData[i];
-            }
-            const rms = Math.sqrt(sumSq / inputData.length);
-            const nowMs = Date.now();
-
-            if (rms < SILENCE_THRESHOLD) {
-                silentFramesCount++;
-                // On speech-to-silence (~500ms = 4 frames @ 128ms), notify Gemini Live immediately
-                if (silentFramesCount === 4 && hasSpokenInBurst) {
-                    hasSpokenInBurst = false;
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: "audio_stream_end" }));
-                    }
-                }
-                if (silentFramesCount > 4 && (nowMs - lastAudioSentAt) < 25000) {
-                    return;
-                }
-            } else {
-                silentFramesCount = 0;
-                hasSpokenInBurst = true;
-            }
-            lastAudioSentAt = nowMs;
 
             const pcm16 = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
@@ -288,6 +263,11 @@ function trackAudioEnergy() {
 function playAudioChunk(base64Data) {
     if (!audioCtx || !speakerAnalyser) return;
     
+    if (stateWatchdogTimer) {
+        clearTimeout(stateWatchdogTimer);
+        stateWatchdogTimer = null;
+    }
+
     // Silence browser speech synthesis if Gemini Live audio is streaming
     if ('speechSynthesis' in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
         try { window.speechSynthesis.cancel(); } catch (_) {}
@@ -458,6 +438,28 @@ initOrbMoodSync();
 
 function updateUIState(stateName) {
     const s = String(stateName || "").toUpperCase();
+
+    // Safety watchdog: clear any prior pending state watchdog
+    if (stateWatchdogTimer) {
+        clearTimeout(stateWatchdogTimer);
+        stateWatchdogTimer = null;
+    }
+
+    // Auto-sync currentState with active conversational states so audio recording is never blocked
+    if (s === "ACTIVE" || s === "LISTENING" || s === "SPEAKING") {
+        if (currentState !== "LOCKED" && currentState !== "CLOSED" && currentState !== "OFFLINE" && currentState !== "BIOMETRIC_PENDING") {
+            currentState = s;
+        }
+    } else if (s === "THINKING" || s === "PROCESSING" || s === "EXECUTING" || s === "FINALIZING") {
+        // If Victor remains in THINKING/EXECUTING/FINALIZING for > 20s without response, auto-restore LISTENING
+        stateWatchdogTimer = setTimeout(() => {
+            console.warn(`[Victor Watchdog] State '${s}' timed out after 20s. Restoring to LISTENING.`);
+            if (currentState !== "LOCKED" && currentState !== "CLOSED" && currentState !== "OFFLINE" && currentState !== "BIOMETRIC_PENDING") {
+                currentState = "LISTENING";
+                updateUIState("LISTENING");
+            }
+        }, 20000);
+    }
     if (globalStatusText) {
         if (s === "ACTIVE" || s === "LISTENING" || s === "SPEAKING") {
             globalStatusText.textContent = "System: Online";
@@ -470,6 +472,12 @@ function updateUIState(stateName) {
     if (orbStateText) {
         if (s === "ACTIVE" || s === "LISTENING") {
             orbStateText.textContent = isMicMuted ? "Mic Muted" : "Live & Listening";
+        } else if (s === "WAITING_FOR_CONTINUATION") {
+            orbStateText.textContent = "Live & Listening";
+        } else if (s === "FINALIZING") {
+            orbStateText.textContent = "Finalizing...";
+        } else if (s === "TRANSCRIBING") {
+            orbStateText.textContent = "Transcribing...";
         } else if (s === "SPEAKING") {
             orbStateText.textContent = "Speaking";
         } else if (s === "THINKING" || s === "PROCESSING" || s === "EXECUTING") {
@@ -1009,6 +1017,17 @@ ws.onmessage = (event) => {
                 }
             }
 
+        } else if (message.type === "turn_state") {
+            if (message.state === "WAITING_FOR_CONTINUATION") {
+                if (orbStateText && !isMicMuted) orbStateText.textContent = message.label || "Live & Listening";
+                if (window.VictorOrbInstance) window.VictorOrbInstance.setState("listening");
+            } else if (message.state === "FINALIZING") {
+                if (orbStateText) orbStateText.textContent = message.label || "Finalizing...";
+                if (window.VictorOrbInstance) window.VictorOrbInstance.setState("thinking");
+            } else if (message.orb_state) {
+                updateUIState(message.orb_state);
+            }
+
         } else if (message.type === "orb_state") {
             if (message.state === "ERROR") {
                 currentState = "ERROR";
@@ -1131,6 +1150,14 @@ ws.onmessage = (event) => {
         } else if (message.type === "camera_analysis_update") {
             if (message.text) {
                 appendTranscriptEntry("assistant", `👁️ Visual Analysis: ${message.text}`);
+            }
+        } else if (message.type === "dashboard_navigate") {
+            if (message.section === "finance" && window.FinanceDashboard) {
+                window.FinanceDashboard.handleNavigation(message.tab, message.filters);
+            }
+        } else if (message.type === "finance_update") {
+            if (window.FinanceDashboard) {
+                window.FinanceDashboard.handleUpdate(message);
             }
         }
     } catch (e) {
@@ -1515,6 +1542,15 @@ const MODULE_DEFINITIONS = {
             { title: 'Toggle Microphone', desc: 'Mute or unmute live voice input', cmd: '__TOGGLE_MIC__', prefill: false },
             { title: 'Windows Settings', desc: 'Open OS Display/Sound/Network settings', cmd: 'Open Windows settings', prefill: false },
         ]
+    },
+    finance: {
+        title: 'Personal Finance & Bills',
+        actions: [
+            { title: 'Show Monthly Expenses', desc: 'Display spending overview & breakdown', cmd: 'Victor, show my monthly expenses', prefill: false },
+            { title: 'Upcoming Bills', desc: 'Inspect pending due dates and bills', cmd: 'List my upcoming bills', prefill: false },
+            { title: 'Budget Status', desc: 'Check budget utilization & alerts', cmd: 'Check my monthly budget status', prefill: false },
+            { title: 'Active Subscriptions', desc: 'Review recurring subscriptions and costs', cmd: 'List my active subscriptions', prefill: false },
+        ]
     }
 };
 
@@ -1527,6 +1563,18 @@ function openModuleView(viewKey) {
     document.querySelectorAll('.sidebar-item, .topnav-item').forEach(btn => {
         btn.classList.toggle('is-active', btn.dataset.view === viewKey);
     });
+
+    if (viewKey === 'finance') {
+        if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        if (window.FinanceDashboard) {
+            window.FinanceDashboard.show();
+        }
+        return;
+    } else {
+        if (window.FinanceDashboard) {
+            window.FinanceDashboard.hide();
+        }
+    }
 
     if (viewKey === 'dashboard' || !MODULE_DEFINITIONS[viewKey]) {
         if (moduleDrawer) moduleDrawer.classList.add('hidden');

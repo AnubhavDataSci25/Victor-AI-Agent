@@ -7,6 +7,7 @@ reminders, budgets, subscriptions, and financial Q&A.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import logging
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from app.finance.analytics import FinanceAnalytics
+from app.finance.events import emit_finance_event_sync
 from app.finance.models import (
     DEFAULT_CATEGORIES,
     Bill,
@@ -99,7 +101,7 @@ class FinanceManager:
         # Normalize category
         norm_cat = self._normalize_category(category)
 
-        txn_id = f"txn_{uuid.uuid4().hex[:10]}"
+        txn_id = self.store.generate_next_transaction_id(date_str)
         txn = Transaction(
             transaction_id=txn_id,
             transaction_type=t_type,
@@ -116,6 +118,7 @@ class FinanceManager:
 
         self.store.add_transaction(txn)
         logger.info(f"[FinanceManager] Recorded {t_type.value} ID: {txn_id} Amount: {amount} {norm_cat}")
+        emit_finance_event_sync("transaction_created", txn.to_dict())
 
         # Check if any budget thresholds were crossed by this expense
         budget_alerts = []
@@ -162,18 +165,56 @@ class FinanceManager:
             txn.transaction_type = TransactionType(str(kwargs["transaction_type"]).upper())
 
         updated = self.store.update_transaction(txn)
+        if updated:
+            emit_finance_event_sync("transaction_updated", txn.to_dict())
         return {
             "success": updated,
             "transaction": txn.to_dict(),
             "message": f"Transaction '{transaction_id}' updated successfully.",
         }
 
-    def delete_transaction(self, transaction_id: str) -> Dict[str, Any]:
-        """Deletes a transaction from the persistent store."""
-        deleted = self.store.delete_transaction(transaction_id)
+    def delete_transaction(
+        self,
+        transaction_id: Optional[str] = None,
+        merchant: Optional[str] = None,
+        amount: Optional[float] = None,
+        category: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Deletes a transaction from the persistent store with multi-layer smart resolution."""
+        txn = self.store.find_transaction_to_delete(
+            identifier=transaction_id,
+            merchant=merchant,
+            amount=amount,
+            category=category,
+        )
+
+        if not txn:
+            search_desc = []
+            if transaction_id:
+                search_desc.append(f"identifier '{transaction_id}'")
+            if merchant:
+                search_desc.append(f"merchant '{merchant}'")
+            if amount is not None:
+                search_desc.append(f"amount ₹{amount:.2f}")
+            criteria = " and ".join(search_desc) if search_desc else "specified criteria"
+            return {"success": False, "error": f"Transaction matching {criteria} not found."}
+
+        target_id = txn.transaction_id
+        deleted = self.store.delete_transaction(target_id)
         if deleted:
-            return {"success": True, "message": f"Transaction '{transaction_id}' was successfully deleted."}
-        return {"success": False, "error": f"Transaction '{transaction_id}' not found."}
+            emit_finance_event_sync("transaction_deleted", {"transaction_id": target_id})
+            return {
+                "success": True,
+                "transaction_id": target_id,
+                "transaction": txn.to_dict(),
+                "message": f"Transaction '{target_id}' (₹{txn.amount:.2f} for '{txn.merchant_or_payee}' on {txn.transaction_date[:10]}) was successfully deleted.",
+            }
+        return {"success": False, "error": f"Failed to delete transaction '{target_id}' from database."}
+
+    def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
+        """Retrieves a single transaction by ID."""
+        return self.store.get_transaction(transaction_id)
 
     def list_transactions(self, **kwargs: Any) -> List[Dict[str, Any]]:
         """Lists transactions matching criteria."""
@@ -220,6 +261,7 @@ class FinanceManager:
         self.store.add_bill(bill)
         # Schedule reminders via existing scheduler
         self.reminder_manager.schedule_bill_reminders(bill)
+        emit_finance_event_sync("bill_created", bill.to_dict())
 
         return {
             "success": True,
@@ -275,6 +317,8 @@ class FinanceManager:
         if next_bill:
             msg += f" Next recurring cycle scheduled for {next_bill.due_date}."
 
+        emit_finance_event_sync("bill_paid", updated_bill.to_dict())
+
         return {
             "success": True,
             "bill": updated_bill.to_dict(),
@@ -288,10 +332,34 @@ class FinanceManager:
         return [b.to_dict() for b in bills]
 
     def postpone_bill_reminder(self, bill_id: str, days: int = 1) -> Dict[str, Any]:
-        success = self.reminder_manager.postpone_bill_reminder(bill_id, days=days)
-        if success:
-            return {"success": True, "message": f"Bill reminder postponed by {days} day(s)."}
-        return {"success": False, "error": f"Reminder for bill '{bill_id}' not found."}
+        bill = self.store.get_bill(bill_id)
+        if not bill:
+            return {"success": False, "error": f"Bill '{bill_id}' not found."}
+
+        try:
+            curr_date = datetime.date.fromisoformat(bill.due_date[:10])
+            new_date = (curr_date + datetime.timedelta(days=days)).isoformat()
+            bill.due_date = new_date
+            self.store.update_bill(bill)
+        except Exception as e:
+            logger.error("Error updating bill due_date: %s", e)
+
+        self.reminder_manager.postpone_bill_reminder(bill_id, days=days)
+        emit_finance_event_sync("bill_postponed", {"bill_id": bill_id, "days": days})
+        return {
+            "success": True,
+            "bill": bill.to_dict() if bill else None,
+            "message": f"Bill reminder postponed by {days} day(s).",
+        }
+
+    def delete_bill(self, bill_id: str) -> Dict[str, Any]:
+        """Deletes a bill and cancels scheduled reminders."""
+        self.reminder_manager.cancel_bill_reminders(bill_id)
+        deleted = self.store.delete_bill(bill_id)
+        if deleted:
+            emit_finance_event_sync("bill_deleted", {"bill_id": bill_id})
+            return {"success": True, "message": f"Bill '{bill_id}' deleted."}
+        return {"success": False, "error": f"Bill '{bill_id}' not found."}
 
     # =========================================================================
     # BUDGETS
@@ -326,6 +394,7 @@ class FinanceManager:
         )
 
         self.store.set_budget(budget)
+        emit_finance_event_sync("budget_updated", budget.to_dict())
         return {
             "success": True,
             "budget_id": b_id,
@@ -340,6 +409,8 @@ class FinanceManager:
 
     def delete_budget(self, budget_id: str) -> Dict[str, Any]:
         deleted = self.store.delete_budget(budget_id)
+        if deleted:
+            emit_finance_event_sync("budget_deleted", {"budget_id": budget_id})
         return {"success": deleted, "message": f"Budget '{budget_id}' deleted." if deleted else "Budget not found."}
 
     # =========================================================================
@@ -374,6 +445,7 @@ class FinanceManager:
         )
 
         self.store.add_subscription(sub)
+        emit_finance_event_sync("subscription_created", sub.to_dict())
         return {
             "success": True,
             "subscription_id": sub_id,
@@ -384,6 +456,14 @@ class FinanceManager:
     def list_subscriptions(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         subs = self.store.list_subscriptions(status=status)
         return [s.to_dict() for s in subs]
+
+    def delete_subscription(self, subscription_id: str) -> Dict[str, Any]:
+        """Deletes a tracked subscription."""
+        deleted = self.store.delete_subscription(subscription_id)
+        if deleted:
+            emit_finance_event_sync("subscription_deleted", {"subscription_id": subscription_id})
+            return {"success": True, "message": f"Subscription '{subscription_id}' deleted."}
+        return {"success": False, "error": f"Subscription '{subscription_id}' not found."}
 
     # =========================================================================
     # RECEIPT SCANNING

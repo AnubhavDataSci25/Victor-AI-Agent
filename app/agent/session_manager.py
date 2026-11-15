@@ -27,6 +27,7 @@ from app.config import load_config
 from app.live.session import LiveSessionManager
 from app.logging import get_logger, log_event
 from app.tools.browser.playwright_driver import PlaywrightBrowserDriver
+from app.voice.turn_manager import TurnManagerConfig, TurnState, VoiceTurnManager
 
 logger = get_logger("agent.session_manager")
 
@@ -130,6 +131,14 @@ class VictorSessionManager:
         self._is_speaking = False
         self._pending_first_command: Optional[str] = None
 
+        # Voice Turn Manager for intelligent continuous listening and turn endpointing
+        self.turn_manager = VoiceTurnManager(
+            config=TurnManagerConfig(),
+            on_state_change=self._on_turn_state_change,
+            on_turn_finalized=self._on_turn_finalized,
+            on_turn_timeout=self._on_turn_timeout,
+        )
+
         # Camera & Live Visual Analyzer UI Callbacks
         try:
             from app.tools.vision.camera_driver import get_camera_driver
@@ -142,7 +151,7 @@ class VictorSessionManager:
     def is_authenticated(self) -> bool:
         """
         True ONLY if both PIN and Windows Hello biometric authentication
-        have succeeded and the session is active.
+        have succeeded and the session is not locked.
         Enforces PIN_VERIFIED != AUTHENTICATED.
         """
         return self._auth_manager.is_unlocked() and self.state in (
@@ -150,7 +159,16 @@ class VictorSessionManager:
             VictorState.ACTIVE,
             VictorState.EXECUTING,
             VictorState.SPEAKING,
+            VictorState.THINKING,
+            VictorState.WAITING_FOR_CONTINUATION,
+            VictorState.FINALIZING,
+            VictorState.TRANSCRIBING,
+            VictorState.ERROR,
         )
+
+    def is_unlocked(self) -> bool:
+        """True if user has completed 2FA authentication and session is not locked."""
+        return self._auth_manager.is_unlocked() and self.state != VictorState.LOCKED
 
     async def set_state(self, new_state: VictorState):
         self.state = new_state
@@ -372,6 +390,90 @@ class VictorSessionManager:
         })
         await self.lock()
 
+    def _on_turn_state_change(self, old_state: Any, new_state: Any) -> None:
+        """Propagate turn manager state changes to the UI Orb and status bar."""
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        val = new_state.value if hasattr(new_state, "value") else str(new_state)
+        logger.debug(f"[SessionManager] Turn state: {old_state} -> {val}")
+
+        if val == "SPEECH_ACTIVE":
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.live_session.send_activity_start(), loop)
+            coro = self.websocket_send_callback({
+                "type": "turn_state",
+                "state": "SPEECH_ACTIVE",
+                "orb_state": "LISTENING",
+                "label": "Listening...",
+            })
+        elif val == "WAITING_FOR_CONTINUATION":
+            coro = self.websocket_send_callback({
+                "type": "turn_state",
+                "state": "WAITING_FOR_CONTINUATION",
+                "orb_state": "LISTENING",
+                "label": "Listening (pause)...",
+            })
+        elif val == "FINALIZING":
+            coro = self.websocket_send_callback({
+                "type": "turn_state",
+                "state": "FINALIZING",
+                "orb_state": "THINKING",
+                "label": "Finalizing...",
+            })
+        elif val == "LISTENING":
+            coro = self.websocket_send_callback({
+                "type": "turn_state",
+                "state": "LISTENING",
+                "orb_state": "LISTENING",
+                "label": "Live & Listening",
+            })
+        else:
+            coro = None
+
+        if coro and loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def _on_turn_finalized(self, final_pcm: bytes, clean_hint: str) -> None:
+        """Triggered when complete utterance endpoint is reached."""
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        async def _dispatch_finalized():
+            await self.set_state(VictorState.THINKING)
+            await self.websocket_send_callback({
+                "type": "orb_state",
+                "state": "THINKING",
+            })
+            await self.live_session.send_activity_end()
+            await self.live_session.send_audio_stream_end()
+
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(_dispatch_finalized(), loop)
+
+    def _on_turn_timeout(self, reason: str) -> None:
+        """Triggered when speech continuation window times out without completion."""
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        async def _notify_timeout():
+            await self.websocket_send_callback({
+                "type": "orb_state",
+                "state": "LISTENING",
+            })
+
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(_notify_timeout(), loop)
+
     async def handle_audio_input(self, pcm_chunk: bytes):
         """Handle incoming PCM audio from client mic."""
         # Acoustic echo suppression: ignore mic audio while Victor is speaking
@@ -382,21 +484,38 @@ class VictorSessionManager:
         if hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False):
             return
 
-        # Strictly stream only when session is ACTIVE; ignore during BIOMETRIC_PENDING or locks
-        if self.state != VictorState.ACTIVE:
-            return
+        # Stream when active, listening, or in voice turn states; unblock barge-in if unlocked
+        if self.state not in (
+            VictorState.ACTIVE,
+            VictorState.LISTENING,
+            VictorState.WAITING_FOR_CONTINUATION,
+            VictorState.THINKING,
+        ):
+            if self.is_unlocked():
+                self.state = VictorState.ACTIVE
+            else:
+                return
 
         self.last_activity_time = time.time()  # Reset watchdog on speech
         self._auth_manager.touch_activity()
+
+        # Pass through VoiceTurnManager for intelligent silence & endpoint management
+        if hasattr(self, "turn_manager"):
+            self.turn_manager.process_audio(pcm_chunk)
+
+        # Stream audio chunk to live session
         await self.live_session.send_audio(pcm_chunk)
 
     async def handle_audio_stream_end(self):
-        """Signal end of user speech burst to Gemini Live for low-latency turn completion."""
+        """Signal end of user speech stream."""
         if self.state != VictorState.ACTIVE or self._is_speaking:
             return
         if hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False):
             return
-        await self.live_session.send_audio_stream_end()
+        if hasattr(self, "turn_manager"):
+            self.turn_manager.finalize_turn(reason="audio_stream_end")
+        else:
+            await self.live_session.send_audio_stream_end()
 
     async def handle_command(self, command_text: str) -> bool:
         """Handle incoming text or voice command from user."""
@@ -537,6 +656,8 @@ class VictorSessionManager:
             self.memory.session.clear()
 
         self._auth_manager.lock()
+        if hasattr(self, "turn_manager"):
+            self.turn_manager.reset()
         await self.live_session.close()
 
         browser_driver = PlaywrightBrowserDriver()

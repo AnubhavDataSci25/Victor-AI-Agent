@@ -56,6 +56,7 @@ class CurrentAffairsGetUpdatesTool(BaseTool):
 
 class CurrentAffairsOpenStoryTool(BaseTool):
     name = "current_affairs_open_story"
+    timeout_seconds = 60.0
     description = (
         "Opens a specific news story from the most recent current affairs briefing in the browser "
         "using its exact source URL. Use this when the user says 'Open the second story', "

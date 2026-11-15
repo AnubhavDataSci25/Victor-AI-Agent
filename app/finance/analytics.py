@@ -128,6 +128,22 @@ class FinanceAnalytics:
         budgets = self.check_all_budget_utilizations(y, m)
         summary["budgets"] = budgets
 
+        overall_b = next((b for b in budgets if str(b.get("category", "")).strip().lower() in ("all", "overall")), None)
+        if overall_b:
+            summary["remaining_budget"] = overall_b["remaining_amount"]
+            summary["overall_budget_limit"] = overall_b["limit_amount"]
+            summary["overall_budget_spent"] = overall_b["spent_amount"]
+        elif budgets:
+            total_limit = sum(b["limit_amount"] for b in budgets)
+            total_spent = sum(b["spent_amount"] for b in budgets)
+            summary["remaining_budget"] = max(0.0, round(total_limit - total_spent, 2))
+            summary["overall_budget_limit"] = total_limit
+            summary["overall_budget_spent"] = total_spent
+        else:
+            summary["remaining_budget"] = None
+            summary["overall_budget_limit"] = None
+            summary["overall_budget_spent"] = 0.0
+
         return summary
 
     def get_daily_summary(self, target_date: Optional[str] = None) -> Dict[str, Any]:
@@ -229,9 +245,12 @@ class FinanceAnalytics:
             elif pct_used >= 70.0:
                 alert = "WARNING_70"
 
+            p_str = b.period.value.lower() if hasattr(b.period, "value") else str(b.period).lower()
             results.append({
                 "budget_id": b.budget_id,
+                "id": b.budget_id,
                 "name": b.name,
+                "period": p_str,
                 "category": b.category or "Overall",
                 "limit_amount": limit,
                 "spent_amount": spent,
@@ -247,10 +266,12 @@ class FinanceAnalytics:
         s_date = budget.start_date if budget.period == BudgetPeriod.CUSTOM and budget.start_date else start_date
         e_date = budget.end_date if budget.period == BudgetPeriod.CUSTOM and budget.end_date else end_date
 
+        cat_filter = budget.category if (budget.category and budget.category.strip().lower() not in ("all", "overall")) else None
+
         txns = self.store.list_transactions(
             start_date=s_date,
             end_date=e_date,
-            category=budget.category,
+            category=cat_filter,
             txn_type=TransactionType.EXPENSE,
             limit=10000,
         )

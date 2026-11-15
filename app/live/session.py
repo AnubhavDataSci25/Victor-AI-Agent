@@ -36,6 +36,9 @@ class LiveSessionManager:
         self._is_executing_tools: bool = False
         self.resumption_handle: Optional[str] = None
         self.cooldown_delay_seconds: int = int(os.getenv("GEMINI_1011_COOLDOWN", "120"))
+        self._keepalive_task: Optional[asyncio.Task] = None
+        self._post_tool_watchdog_task: Optional[asyncio.Task] = None
+        self._last_audio_sent_time: float = time.time()
         
         # Instantiate Tool Dispatcher
         self.tool_dispatcher = LiveToolDispatcher(self.session_manager)
@@ -127,8 +130,7 @@ class LiveSessionManager:
             ),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    silence_duration_ms=450,
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    disabled=True,
                 )
             ),
             system_instruction=types.Content(
@@ -221,7 +223,8 @@ class LiveSessionManager:
                         "For Personal Finance, Expenses, Bills & Subscriptions: "
                         "You are Victor's Personal Finance & Expense Management Agent. "
                         "When the user mentions spending money, receiving income, or refunds (e.g. 'I spent 450 rupees on dinner through UPI', 'Record 15000 salary'), use finance_record_transaction. "
-                        "To correct an expense amount or category, use finance_update_transaction; to delete duplicates, use finance_delete_transaction. "
+                        "To correct an expense amount or category, use finance_update_transaction; "
+                        "to delete any transaction by ID (e.g. 'NOVT001' or '001' or '1'), by merchant name (e.g. 'Auto wala'), by amount (e.g. 350), or to delete the last/latest transaction or duplicate, use finance_delete_transaction. "
                         "To search or review transactions, use finance_list_transactions. "
                         "To schedule or track bills (e.g. Wi-Fi bill, electricity, rent), use finance_manage_bill; when a bill is paid, use finance_pay_bill. "
                         "To set or inspect budget limits and threshold alerts, use finance_manage_budget. "
@@ -249,6 +252,10 @@ class LiveSessionManager:
             self.is_connected = True
             logger.info(f"Gemini Live connection established with model '{self.model}'.")
             
+            self._last_audio_sent_time = time.time()
+            if self._keepalive_task and not self._keepalive_task.done():
+                self._keepalive_task.cancel()
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
             self.receive_task = asyncio.create_task(self._receive_loop())
             return True
         except Exception as e:
@@ -262,6 +269,10 @@ class LiveSessionManager:
                     self.session = await self._ctx.__aenter__()
                     self.is_connected = True
                     logger.info(f"Gemini Live connection established fresh with model '{self.model}'.")
+                    self._last_audio_sent_time = time.time()
+                    if self._keepalive_task and not self._keepalive_task.done():
+                        self._keepalive_task.cancel()
+                    self._keepalive_task = asyncio.create_task(self._keepalive_loop())
                     self.receive_task = asyncio.create_task(self._receive_loop())
                     return True
                 except Exception as fresh_err:
@@ -315,6 +326,8 @@ class LiveSessionManager:
 
                         model_turn = getattr(server_content, "model_turn", None)
                         if model_turn:
+                            if self._post_tool_watchdog_task and not self._post_tool_watchdog_task.done():
+                                self._post_tool_watchdog_task.cancel()
                             # Signal the SPEAKING state to the orb
                             await self.session_manager.websocket_send_callback({
                                 "type": "orb_state",
@@ -334,6 +347,10 @@ class LiveSessionManager:
                         # Handle user live audio transcription
                         input_tx = getattr(server_content, "input_transcription", None)
                         if input_tx and getattr(input_tx, "text", None):
+                            # Feed real-time transcript to VoiceTurnManager for continuation clues & finish phrases
+                            if hasattr(self.session_manager, "turn_manager"):
+                                self.session_manager.turn_manager.feed_transcript_hint(input_tx.text)
+
                             await self.session_manager.websocket_send_callback({
                                 "type": "transcript",
                                 "role": "user",
@@ -363,6 +380,9 @@ class LiveSessionManager:
                         # When model finishes speaking its turn, go to LISTENING
                         # (not IDLE — IDLE would stop the orb reactivity)
                         if getattr(server_content, "turn_complete", False):
+                            if self._post_tool_watchdog_task and not self._post_tool_watchdog_task.done():
+                                self._post_tool_watchdog_task.cancel()
+
                             # If tools are currently executing or awaiting intermediate pre-tool turn_complete, ignore it
                             if self._is_executing_tools or self._pending_pre_tool_turn_complete:
                                 logger.debug("[Live Session] Discarding intermediate pre-tool turn_complete from tool invocation.")
@@ -415,6 +435,9 @@ class LiveSessionManager:
                                 self._pending_pre_tool_turn_complete = False
                                 self._turn_has_spoken = False
                                 self._last_tool_error_msg = None
+
+                                if hasattr(self.session_manager, "turn_manager"):
+                                    self.session_manager.turn_manager.rearm_after_turn_completion()
 
                                 await self.session_manager.websocket_send_callback({
                                     "type": "orb_state",
@@ -520,6 +543,10 @@ class LiveSessionManager:
                             self._awaiting_post_tool_speech = True
                             self._turn_has_spoken = False
 
+                            if self._post_tool_watchdog_task and not self._post_tool_watchdog_task.done():
+                                self._post_tool_watchdog_task.cancel()
+                            self._post_tool_watchdog_task = asyncio.create_task(self._post_tool_watchdog(20.0))
+
                             # After sending responses back, the model will reason/speak
                             await self.session_manager.websocket_send_callback({
                                 "type": "orb_state",
@@ -540,16 +567,25 @@ class LiveSessionManager:
             err_msg = str(e)
             logger.error(f"Error in Gemini receive loop: {err_msg}")
             self.is_connected = False
-            await self.session_manager.set_state(VictorState.ERROR)
-            await self.session_manager.websocket_send_callback({
-                "type": "orb_state",
-                "state": "ERROR"
-            })
 
-            # Check for 1011 / Internal Server Error condition
+            # Check for 1008 (Session closed due to client inactivity) and 1011
+            is_1008 = ("1008" in err_msg) or ("inactivity" in err_msg.lower())
             is_1011 = ("1011" in err_msg) or ("internal error" in err_msg.lower()) or ("internal_error" in err_msg.lower())
 
-            if hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated():
+            if is_1008:
+                logger.info("[Live Session] Connection closed due to inactivity (1008). Auto-reconnecting cleanly without locking state.")
+            else:
+                await self.session_manager.set_state(VictorState.ERROR)
+                await self.session_manager.websocket_send_callback({
+                    "type": "orb_state",
+                    "state": "ERROR"
+                })
+
+            # Check if session is authenticated / unlocked
+            is_unlocked = getattr(self.session_manager, "is_unlocked", None)
+            is_user_active = is_unlocked() if is_unlocked else (hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated())
+
+            if is_user_active:
                 if is_1011:
                     delay = self.cooldown_delay_seconds
                     logger.warning(f"[Live Session] Gemini Live 1011 Internal Error encountered. Entering {delay}s cooldown standby.")
@@ -557,6 +593,9 @@ class LiveSessionManager:
                     if self.cooldown_task and not self.cooldown_task.done():
                         self.cooldown_task.cancel()
                     self.cooldown_task = asyncio.create_task(self._standby_and_restart(delay_seconds=delay))
+                elif is_1008:
+                    # Silent auto-reconnect for inactivity
+                    asyncio.create_task(self._reconnect_after_error(silent=True))
                 else:
                     await self.session_manager.websocket_send_callback({
                         "type": "transcript",
@@ -596,7 +635,9 @@ class LiveSessionManager:
 
         try:
             for remaining in range(delay_seconds, 0, -1):
-                if not self.session_manager.is_authenticated():
+                is_unlocked = getattr(self.session_manager, "is_unlocked", None)
+                is_user_active = is_unlocked() if is_unlocked else (hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated())
+                if not is_user_active:
                     logger.info("[Live Session] Session locked or closed during cooldown; aborting.")
                     self.is_in_cooldown = False
                     return
@@ -666,17 +707,19 @@ class LiveSessionManager:
         logger.info("[Live Session] Cooldown cancelled by user action; initiating immediate start().")
         return await self.start()
 
-    async def _reconnect_after_error(self, max_retries: int = 3):
+    async def _reconnect_after_error(self, max_retries: int = 3, silent: bool = False):
         """Attempts graceful reconnection to Gemini Live after an unexpected socket disconnect."""
-        logger.info("[Live Session] Starting auto-reconnect task...")
+        logger.info(f"[Live Session] Starting auto-reconnect task (silent={silent})...")
         await self.close(clear_cooldown=False)
 
         for attempt in range(1, max_retries + 1):
-            if not self.session_manager.is_authenticated():
-                logger.info("[Live Session] Session not authenticated; aborting auto-reconnect.")
+            is_unlocked = getattr(self.session_manager, "is_unlocked", None)
+            is_user_active = is_unlocked() if is_unlocked else (hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated())
+            if not is_user_active:
+                logger.info("[Live Session] Session not authenticated/active; aborting auto-reconnect.")
                 return
 
-            delay = 2.0 * attempt
+            delay = 1.5 * attempt
             logger.info(f"[Live Session] Reconnection attempt {attempt}/{max_retries} in {delay:.1f}s...")
             await asyncio.sleep(delay)
 
@@ -689,11 +732,12 @@ class LiveSessionManager:
                         "type": "orb_state",
                         "state": "LISTENING",
                     })
-                    await self.session_manager.websocket_send_callback({
-                        "type": "transcript",
-                        "role": "assistant",
-                        "text": "Gemini Live connection restored, Sir. Ready for your commands.",
-                    })
+                    if not silent:
+                        await self.session_manager.websocket_send_callback({
+                            "type": "transcript",
+                            "role": "assistant",
+                            "text": "Gemini Live connection restored, Sir. Ready for your commands.",
+                        })
                     return
             except Exception as rec_err:
                 logger.warning(f"[Live Session] Reconnect attempt {attempt} failed: {rec_err}")
@@ -724,10 +768,79 @@ class LiveSessionManager:
             logger.warning("[Live Session] Proactive resumption failed; starting auto-reconnect.")
             asyncio.create_task(self._reconnect_after_error())
 
+    async def _keepalive_loop(self):
+        """
+        Periodically sends a tiny silent audio frame (10ms of 16kHz 16-bit PCM = 320 bytes of zeros)
+        if no audio has been sent for 45 seconds. This prevents Gemini Live from closing the
+        connection with 1008 (Session closed due to client inactivity).
+        """
+        logger.debug("[Live Session] Keepalive loop started.")
+        silent_frame = b"\x00" * 320
+        try:
+            while self.is_connected and self.session:
+                await asyncio.sleep(15.0)
+                if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
+                    continue
+                # If no audio sent in the last 45 seconds, send a keepalive ping
+                if time.time() - self._last_audio_sent_time >= 45.0:
+                    try:
+                        if hasattr(self.session, "send_realtime_input"):
+                            await self.session.send_realtime_input(
+                                audio=types.Blob(data=silent_frame, mime_type="audio/pcm;rate=16000")
+                            )
+                        else:
+                            await self.session.send(input=types.LiveClientRealtimeInput(
+                                audio=types.Blob(data=silent_frame, mime_type="audio/pcm;rate=16000")
+                            ))
+                        self._last_audio_sent_time = time.time()
+                        logger.debug("[Live Session] Sent silent keepalive frame to Gemini Live.")
+                    except Exception as ping_err:
+                        logger.debug(f"[Live Session] Keepalive frame error: {ping_err}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"[Live Session] Keepalive loop exited: {e}")
+
+    async def _post_tool_watchdog(self, timeout_seconds: float = 20.0):
+        """
+        Safety watchdog: if tool responses have been sent to Gemini Live but neither
+        model_turn nor turn_complete arrives within timeout_seconds, re-arm Victor so he
+        does not remain stuck indefinitely in THINKING state with microphone blocked.
+        """
+        try:
+            await asyncio.sleep(timeout_seconds)
+            if self._awaiting_post_tool_speech or self._is_executing_tools:
+                logger.warning(
+                    f"[Live Session] Post-tool watchdog fired ({timeout_seconds}s elapsed without model speech). "
+                    "Restoring Victor to LISTENING state."
+                )
+                self._awaiting_post_tool_speech = False
+                self._is_executing_tools = False
+                self._turn_tool_counts = {}
+                self._failed_tools_in_turn = set()
+                self._had_tool_execution = False
+                self._pending_pre_tool_turn_complete = False
+                self._turn_has_spoken = False
+                self._last_tool_error_msg = None
+
+                if hasattr(self.session_manager, "turn_manager"):
+                    self.session_manager.turn_manager.rearm_after_turn_completion()
+
+                await self.session_manager.set_state(VictorState.ACTIVE)
+                await self.session_manager.websocket_send_callback({
+                    "type": "orb_state",
+                    "state": "LISTENING",
+                })
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"[Live Session] Post-tool watchdog error: {e}")
+
     async def send_audio(self, pcm_chunk: bytes):
         if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
             return  # Drop silently while disconnected, in cooldown, or during tool execution to avoid 1011 race conditions
 
+        self._last_audio_sent_time = time.time()
         try:
             if hasattr(self.session, "send_realtime_input"):
                 await self.session.send_realtime_input(
@@ -741,6 +854,30 @@ class LiveSessionManager:
             if self.is_connected:
                 logger.error(f"Error sending audio chunk to Gemini Live: {e}")
                 self.is_connected = False
+
+    async def send_activity_start(self):
+        """Signals start of user speech turn to Gemini Live."""
+        if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
+            return
+        try:
+            if hasattr(self.session, "send_realtime_input"):
+                await self.session.send_realtime_input(activity_start=types.ActivityStart())
+        except Exception as e:
+            logger.debug(f"Error sending activity_start to Gemini Live: {e}")
+
+    async def send_activity_end(self):
+        """Signals final completion of user turn to Gemini Live for response generation."""
+        if not self.is_connected or not self.session or self.is_in_cooldown or self._is_executing_tools:
+            return
+        try:
+            if hasattr(self.session, "send_realtime_input"):
+                await self.session.send_realtime_input(activity_end=types.ActivityEnd())
+                await self.session.send_realtime_input(audio_stream_end=True)
+            else:
+                await self.send_audio_stream_end()
+        except Exception as e:
+            logger.debug(f"Error sending activity_end to Gemini Live: {e}; falling back to stream end.")
+            await self.send_audio_stream_end()
 
     async def send_audio_stream_end(self):
         """Signals end of user speech burst for zero-latency Hybrid VAD turn completion."""
@@ -783,6 +920,10 @@ class LiveSessionManager:
         self.is_connected = False
         self._is_executing_tools = False
         self._pending_pre_tool_turn_complete = False
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+        if self._post_tool_watchdog_task and not self._post_tool_watchdog_task.done():
+            self._post_tool_watchdog_task.cancel()
         if clear_cooldown:
             if self.cooldown_task and not self.cooldown_task.done():
                 self.cooldown_task.cancel()

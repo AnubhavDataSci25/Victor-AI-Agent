@@ -145,6 +145,10 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                         <span class="sidebar-label">Automations</span>
                     </button>
+                    <button class="sidebar-item" data-view="finance" type="button" title="Finance & Bill Management Dashboard">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        <span class="sidebar-label">Finance &amp; Bills</span>
+                    </button>
                     <button class="sidebar-item" data-view="agents" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                         <span class="sidebar-label">Agents (Multi)</span>
@@ -424,6 +428,344 @@
                     </div>
                     <div id="moduleCardsGrid" class="module-cards-grid"></div>
                 </section>
+
+                <!-- ================================================================
+                     VICTOR FINANCE & BILL MANAGEMENT COMMAND CENTER
+                     ================================================================ -->
+                <section id="financeDashboardView" class="finance-dashboard-view hidden" aria-label="Finance Command Center">
+                    <!-- Top Control Strip -->
+                    <div class="fin-topbar">
+                        <div class="fin-title-group">
+                            <div class="fin-emblem">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00D9FF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                            </div>
+                            <div>
+                                <h2 class="fin-main-title">FINANCE COMMAND CENTER</h2>
+                                <p class="fin-sub-title">Personal Finance, Expense &amp; Bill Intelligence</p>
+                            </div>
+                        </div>
+
+                        <div class="fin-top-controls">
+                            <!-- Period / Month Selector -->
+                            <div class="fin-month-picker-wrap">
+                                <label for="finMonthSelect" class="fin-control-label">Period:</label>
+                                <input type="month" id="finMonthSelect" class="fin-input fin-month-input">
+                            </div>
+
+                            <!-- Currency Indicator -->
+                            <div class="fin-currency-badge" title="Active Base Currency">
+                                <span>₹ INR</span>
+                            </div>
+
+                            <!-- Sync Button -->
+                            <button id="finSyncBtn" class="fin-btn fin-btn-secondary" type="button" title="Synchronize Data">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                <span>Sync</span>
+                            </button>
+
+                            <!-- Quick Action Buttons -->
+                            <button id="finOpenAddTxBtn" class="fin-btn fin-btn-primary" type="button" title="Record Expense or Income">
+                                <span>+ Transaction</span>
+                            </button>
+                            <button id="finOpenAddBillBtn" class="fin-btn fin-btn-cyan" type="button" title="Add Upcoming Bill">
+                                <span>+ Bill</span>
+                            </button>
+
+                            <!-- Close / Return to Orb Button -->
+                            <button id="finCloseBtn" class="fin-btn fin-btn-ghost" type="button" title="Return to Orb Dashboard">
+                                <span>Return to Orb ✕</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Finance Navigation Tabs (7 Tabs) -->
+                    <nav class="fin-tabs" role="tablist">
+                        <button class="fin-tab-btn is-active" data-tab="overview" type="button" role="tab">Overview</button>
+                        <button class="fin-tab-btn" data-tab="transactions" type="button" role="tab">Transactions</button>
+                        <button class="fin-tab-btn" data-tab="categories" type="button" role="tab">Categories</button>
+                        <button class="fin-tab-btn" data-tab="budgets" type="button" role="tab">Budgets</button>
+                        <button class="fin-tab-btn" data-tab="bills" type="button" role="tab">Bills &amp; Dues</button>
+                        <button class="fin-tab-btn" data-tab="analytics" type="button" role="tab">Analytics &amp; Diff</button>
+                        <button class="fin-tab-btn" data-tab="subscriptions" type="button" role="tab">Subscriptions</button>
+                    </nav>
+
+                    <!-- Tab 1: Overview -->
+                    <div id="finTabOverview" class="fin-tab-pane is-active">
+                        <!-- 4 Summary Metric Cards -->
+                        <div class="fin-metrics-grid">
+                            <div class="glass-card fin-metric-card" id="cardTotalExpenses">
+                                <div class="fin-metric-header">
+                                    <span class="fin-metric-title">TOTAL EXPENSES</span>
+                                    <span class="fin-metric-badge badge-expense">OUTFLOW</span>
+                                </div>
+                                <div class="fin-metric-value" id="finOverviewExpenses">₹0.00</div>
+                                <div class="fin-metric-sub" id="finOverviewExpensesSub">Selected Period</div>
+                            </div>
+
+                            <div class="glass-card fin-metric-card" id="cardTotalIncome">
+                                <div class="fin-metric-header">
+                                    <span class="fin-metric-title">TOTAL INCOME</span>
+                                    <span class="fin-metric-badge badge-income">INFLOW</span>
+                                </div>
+                                <div class="fin-metric-value" id="finOverviewIncome">₹0.00</div>
+                                <div class="fin-metric-sub" id="finOverviewIncomeSub">Earned &amp; Received</div>
+                            </div>
+
+                            <div class="glass-card fin-metric-card" id="cardRemainingBudget">
+                                <div class="fin-metric-header">
+                                    <span class="fin-metric-title">REMAINING BUDGET</span>
+                                    <span class="fin-metric-badge badge-budget" id="finBudgetStatusBadge">ACTIVE</span>
+                                </div>
+                                <div class="fin-metric-value" id="finOverviewBudget">₹0.00</div>
+                                <div class="fin-metric-sub" id="finOverviewBudgetSub">Safe threshold</div>
+                            </div>
+
+                            <div class="glass-card fin-metric-card" id="cardNetSavings">
+                                <div class="fin-metric-header">
+                                    <span class="fin-metric-title">NET SAVINGS</span>
+                                    <span class="fin-metric-badge badge-savings" id="finSavingsRateBadge">0% RATE</span>
+                                </div>
+                                <div class="fin-metric-value" id="finOverviewSavings">₹0.00</div>
+                                <div class="fin-metric-sub" id="finOverviewSavingsSub">Income minus expenses</div>
+                            </div>
+                        </div>
+
+                        <!-- Budget Alert Banner (Shown if limit approached or exceeded) -->
+                        <div id="finBudgetAlertBanner" class="fin-alert-banner hidden">
+                            <div class="fin-alert-icon">⚠️</div>
+                            <div class="fin-alert-content" id="finBudgetAlertText"></div>
+                        </div>
+
+                        <!-- 2-Column Split: Recent Transactions + Upcoming Bills -->
+                        <div class="fin-overview-split">
+                            <!-- Left: Recent Transactions -->
+                            <div class="glass-card fin-panel">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Recent Transactions</div>
+                                    <button class="fin-link-btn" id="finOverviewViewAllTxBtn" type="button">View All &rarr;</button>
+                                </div>
+                                <div id="finOverviewRecentTxList" class="fin-item-list">
+                                    <div class="fin-empty-state">No transactions recorded yet.</div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Upcoming & Overdue Bills -->
+                            <div class="glass-card fin-panel">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Upcoming &amp; Pending Bills</div>
+                                    <button class="fin-link-btn" id="finOverviewViewAllBillsBtn" type="button">View All &rarr;</button>
+                                </div>
+                                <div id="finOverviewUpcomingBillsList" class="fin-item-list">
+                                    <div class="fin-empty-state">No upcoming bills due.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Transactions -->
+                    <div id="finTabTransactions" class="fin-tab-pane">
+                        <!-- Toolbar -->
+                        <div class="glass-card fin-toolbar">
+                            <div class="fin-toolbar-row">
+                                <div class="fin-search-box">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#91A7C4" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                    <input type="text" id="finTxSearchInput" placeholder="Search merchant, notes..." class="fin-input fin-search-input">
+                                </div>
+                                <div class="fin-filter-group">
+                                    <select id="finTxTypeFilter" class="fin-select">
+                                        <option value="">All Types</option>
+                                        <option value="expense">Expense</option>
+                                        <option value="income">Income</option>
+                                        <option value="refund">Refund</option>
+                                    </select>
+                                    <select id="finTxCategoryFilter" class="fin-select">
+                                        <option value="">All Categories</option>
+                                    </select>
+                                    <select id="finTxMethodFilter" class="fin-select">
+                                        <option value="">All Methods</option>
+                                        <option value="UPI">UPI</option>
+                                        <option value="Credit Card">Credit Card</option>
+                                        <option value="Debit Card">Debit Card</option>
+                                        <option value="Net Banking">Net Banking</option>
+                                        <option value="Cash">Cash</option>
+                                        <option value="Wallet">Wallet</option>
+                                    </select>
+                                    <button id="finTxResetFiltersBtn" class="fin-btn fin-btn-secondary" type="button">Reset</button>
+                                    <button id="finTxAddBtn" class="fin-btn fin-btn-primary" type="button">+ Record Transaction</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Table -->
+                        <div class="glass-card fin-table-wrap">
+                            <table class="fin-table" id="finTxTable">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Date</th>
+                                        <th>Type</th>
+                                        <th>Merchant / Description</th>
+                                        <th>Category</th>
+                                        <th>Method</th>
+                                        <th style="text-align: right;">Amount</th>
+                                        <th style="text-align: center;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="finTxTableBody">
+                                    <tr><td colspan="8" class="fin-empty-state">Loading transactions...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Categories -->
+                    <div id="finTabCategories" class="fin-tab-pane">
+                        <div class="fin-categories-layout">
+                            <div class="glass-card fin-panel fin-categories-main">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Category Spending Distribution</div>
+                                    <span class="fin-metric-badge badge-budget" id="finCategoryCountBadge">0 CATEGORIES</span>
+                                </div>
+                                <div id="finCategoryGrid" class="fin-category-grid">
+                                    <div class="fin-empty-state">No category spending in this period.</div>
+                                </div>
+                            </div>
+
+                            <div class="glass-card fin-panel fin-categories-aside">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Add Custom Category</div>
+                                </div>
+                                <form id="finAddCategoryForm" class="fin-form">
+                                    <div class="fin-form-group">
+                                        <label for="finNewCatName" class="fin-form-label">Category Name</label>
+                                        <input type="text" id="finNewCatName" class="fin-input" placeholder="e.g. Fitness, Pet Care" required>
+                                    </div>
+                                    <div class="fin-form-group">
+                                        <label for="finNewCatSubs" class="fin-form-label">Subcategories (comma separated)</label>
+                                        <input type="text" id="finNewCatSubs" class="fin-input" placeholder="Gym, Supplements, Gear">
+                                    </div>
+                                    <button type="submit" class="fin-btn fin-btn-primary" style="width: 100%;">Create Category</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Budgets -->
+                    <div id="finTabBudgets" class="fin-tab-pane">
+                        <div class="fin-budgets-layout">
+                            <div class="glass-card fin-panel fin-budgets-main">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Active Budget Limits</div>
+                                    <button id="finOpenAddBudgetBtn" class="fin-btn fin-btn-primary" type="button">+ Set New Budget</button>
+                                </div>
+                                <div id="finBudgetsList" class="fin-budgets-grid">
+                                    <div class="fin-empty-state">No budgets configured yet. Create one to keep spending within safe limits.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: Bills & Dues -->
+                    <div id="finTabBills" class="fin-tab-pane">
+                        <div class="fin-bills-layout">
+                            <div class="glass-card fin-toolbar fin-bills-toolbar">
+                                <div class="fin-toolbar-row">
+                                    <div class="fin-bill-filters">
+                                        <button class="fin-pill-filter is-active" data-bill-filter="all" type="button">All Bills</button>
+                                        <button class="fin-pill-filter" data-bill-filter="pending" type="button">Pending</button>
+                                        <button class="fin-pill-filter" data-bill-filter="overdue" type="button">Overdue</button>
+                                        <button class="fin-pill-filter" data-bill-filter="paid" type="button">Paid History</button>
+                                    </div>
+                                    <button id="finAddBillTabBtn" class="fin-btn fin-btn-cyan" type="button">+ Add Bill</button>
+                                </div>
+                            </div>
+
+                            <div class="glass-card fin-panel">
+                                <div id="finBillsGrid" class="fin-bills-grid">
+                                    <div class="fin-empty-state">No bills recorded.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 6: Analytics & Diff -->
+                    <div id="finTabAnalytics" class="fin-tab-pane">
+                        <div class="fin-analytics-layout">
+                            <div class="glass-card fin-panel">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Cash Flow &amp; Burn Rate Analysis</div>
+                                    <div class="fin-filter-group">
+                                        <select id="finAnalyticsPeriodSelect" class="fin-select">
+                                            <option value="monthly">Monthly</option>
+                                            <option value="weekly">Weekly</option>
+                                            <option value="annual">Annual</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="fin-metrics-grid" style="margin-top: 1rem;">
+                                    <div class="glass-card fin-metric-card">
+                                        <div class="fin-metric-header"><span class="fin-metric-title">TOTAL INFLOW</span></div>
+                                        <div class="fin-metric-value" id="finAnaInflow">₹0.00</div>
+                                    </div>
+                                    <div class="glass-card fin-metric-card">
+                                        <div class="fin-metric-header"><span class="fin-metric-title">TOTAL OUTFLOW</span></div>
+                                        <div class="fin-metric-value" id="finAnaOutflow">₹0.00</div>
+                                    </div>
+                                    <div class="glass-card fin-metric-card">
+                                        <div class="fin-metric-header"><span class="fin-metric-title">NET SAVINGS</span></div>
+                                        <div class="fin-metric-value" id="finAnaSavings">₹0.00</div>
+                                    </div>
+                                    <div class="glass-card fin-metric-card">
+                                        <div class="fin-metric-header"><span class="fin-metric-title">DAILY BURN RATE</span></div>
+                                        <div class="fin-metric-value" id="finAnaBurnRate">₹0.00/day</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Month Comparison Tool -->
+                            <div class="glass-card fin-panel" style="margin-top: 1.25rem;">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Month-over-Month Comparison</div>
+                                    <div class="fin-filter-group">
+                                        <label for="finCmpMonth1" class="fin-control-label">Month A:</label>
+                                        <input type="month" id="finCmpMonth1" class="fin-input fin-month-input">
+                                        <label for="finCmpMonth2" class="fin-control-label">vs Month B:</label>
+                                        <input type="month" id="finCmpMonth2" class="fin-input fin-month-input">
+                                        <button id="finRunComparisonBtn" class="fin-btn fin-btn-primary" type="button">Compare</button>
+                                    </div>
+                                </div>
+                                <div id="finComparisonOutput" class="fin-comparison-wrap">
+                                    <div class="fin-empty-state">Select two months to inspect detailed delta and category drifts.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 7: Subscriptions -->
+                    <div id="finTabSubscriptions" class="fin-tab-pane">
+                        <div class="fin-subs-layout">
+                            <!-- Recurring Burn Metric Card -->
+                            <div class="glass-card fin-metric-card" style="margin-bottom: 1.25rem;">
+                                <div class="fin-metric-header">
+                                    <span class="fin-metric-title">MONTHLY RECURRING COMMITMENT</span>
+                                    <span class="fin-metric-badge badge-expense">SUBSCRIPTIONS</span>
+                                </div>
+                                <div class="fin-metric-value" id="finSubsBurnRate">₹0.00 / month</div>
+                                <div class="fin-metric-sub" id="finSubsAnnualRate">₹0.00 annualized recurring run rate</div>
+                            </div>
+
+                            <div class="glass-card fin-panel">
+                                <div class="fin-panel-header">
+                                    <div class="fin-panel-title">Active Subscriptions</div>
+                                    <button id="finOpenAddSubBtn" class="fin-btn fin-btn-primary" type="button">+ Add Subscription</button>
+                                </div>
+                                <div id="finSubsGrid" class="fin-subs-grid">
+                                    <div class="fin-empty-state">No subscriptions tracked yet.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </main>
         </div>
 
@@ -545,9 +887,227 @@
         </div>
     </div>
 
+    <!-- ================================================================
+         FINANCE MODALS (Transaction, Bill, Budget, Subscription, Pay Bill)
+         ================================================================ -->
+    <!-- 1. Add Transaction Modal -->
+    <div id="finModalAddTx" class="fin-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="finModalAddTxTitle">
+        <div class="glass-card fin-modal-card">
+            <div class="fin-modal-header">
+                <h3 id="finModalAddTxTitle" class="fin-modal-title">Record Transaction</h3>
+                <button class="fin-modal-close" data-close-modal="finModalAddTx" type="button">&times;</button>
+            </div>
+            <form id="finFormAddTx" class="fin-modal-form">
+                <div class="fin-form-grid">
+                    <div class="fin-form-group">
+                        <label for="finTxType" class="fin-form-label">Type</label>
+                        <select id="finTxType" class="fin-select" required>
+                            <option value="expense">Expense</option>
+                            <option value="income">Income</option>
+                            <option value="refund">Refund</option>
+                        </select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finTxAmount" class="fin-form-label">Amount (₹)</label>
+                        <input type="number" id="finTxAmount" class="fin-input" step="0.01" min="0.01" placeholder="450.00" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finTxCategory" class="fin-form-label">Category</label>
+                        <select id="finTxCategory" class="fin-select" required></select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finTxMerchant" class="fin-form-label">Merchant / Source</label>
+                        <input type="text" id="finTxMerchant" class="fin-input" placeholder="e.g. Swiggy, Amazon, Salary" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finTxDate" class="fin-form-label">Date</label>
+                        <input type="date" id="finTxDate" class="fin-input" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finTxMethod" class="fin-form-label">Payment Method</label>
+                        <select id="finTxMethod" class="fin-select">
+                            <option value="UPI">UPI</option>
+                            <option value="Credit Card">Credit Card</option>
+                            <option value="Debit Card">Debit Card</option>
+                            <option value="Net Banking">Net Banking</option>
+                            <option value="Cash">Cash</option>
+                            <option value="Wallet">Wallet</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="fin-form-group" style="margin-top: 1rem;">
+                    <label for="finTxDesc" class="fin-form-label">Description / Notes</label>
+                    <input type="text" id="finTxDesc" class="fin-input" placeholder="Dinner with friends">
+                </div>
+                <div class="fin-modal-actions">
+                    <button type="button" class="fin-btn fin-btn-secondary" data-close-modal="finModalAddTx">Cancel</button>
+                    <button type="submit" class="fin-btn fin-btn-primary">Save Transaction</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 2. Add Bill Modal -->
+    <div id="finModalAddBill" class="fin-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="finModalAddBillTitle">
+        <div class="glass-card fin-modal-card">
+            <div class="fin-modal-header">
+                <h3 id="finModalAddBillTitle" class="fin-modal-title">Add Upcoming Bill</h3>
+                <button class="fin-modal-close" data-close-modal="finModalAddBill" type="button">&times;</button>
+            </div>
+            <form id="finFormAddBill" class="fin-modal-form">
+                <div class="fin-form-grid">
+                    <div class="fin-form-group">
+                        <label for="finBillTitle" class="fin-form-label">Bill Title / Payee</label>
+                        <input type="text" id="finBillTitle" class="fin-input" placeholder="e.g. Electricity Bill" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBillAmount" class="fin-form-label">Amount (₹)</label>
+                        <input type="number" id="finBillAmount" class="fin-input" step="0.01" min="0.01" placeholder="1200.00" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBillDueDate" class="fin-form-label">Due Date</label>
+                        <input type="date" id="finBillDueDate" class="fin-input" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBillCategory" class="fin-form-label">Category</label>
+                        <select id="finBillCategory" class="fin-select"></select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBillRecurrence" class="fin-form-label">Recurrence</label>
+                        <select id="finBillRecurrence" class="fin-select">
+                            <option value="none">One-time (None)</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="quarterly">Quarterly</option>
+                            <option value="yearly">Yearly</option>
+                        </select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBillMethod" class="fin-form-label">Expected Payment Method</label>
+                        <input type="text" id="finBillMethod" class="fin-input" placeholder="UPI / Net Banking">
+                    </div>
+                </div>
+                <div class="fin-modal-actions">
+                    <button type="button" class="fin-btn fin-btn-secondary" data-close-modal="finModalAddBill">Cancel</button>
+                    <button type="submit" class="fin-btn fin-btn-cyan">Save Bill</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 3. Set Budget Modal -->
+    <div id="finModalAddBudget" class="fin-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="finModalAddBudgetTitle">
+        <div class="glass-card fin-modal-card">
+            <div class="fin-modal-header">
+                <h3 id="finModalAddBudgetTitle" class="fin-modal-title">Set / Update Budget</h3>
+                <button class="fin-modal-close" data-close-modal="finModalAddBudget" type="button">&times;</button>
+            </div>
+            <form id="finFormAddBudget" class="fin-modal-form">
+                <div class="fin-form-grid">
+                    <div class="fin-form-group">
+                        <label for="finBudgetCategory" class="fin-form-label">Target Category</label>
+                        <select id="finBudgetCategory" class="fin-select" required>
+                            <option value="All">All Categories (Overall Budget)</option>
+                        </select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBudgetPeriod" class="fin-form-label">Period</label>
+                        <select id="finBudgetPeriod" class="fin-select">
+                            <option value="monthly">Monthly</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="annual">Annual</option>
+                        </select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finBudgetLimit" class="fin-form-label">Limit Amount (₹)</label>
+                        <input type="number" id="finBudgetLimit" class="fin-input" step="1" min="1" placeholder="25000" required>
+                    </div>
+                </div>
+                <div class="fin-modal-actions">
+                    <button type="button" class="fin-btn fin-btn-secondary" data-close-modal="finModalAddBudget">Cancel</button>
+                    <button type="submit" class="fin-btn fin-btn-primary">Save Budget</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 4. Add Subscription Modal -->
+    <div id="finModalAddSub" class="fin-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="finModalAddSubTitle">
+        <div class="glass-card fin-modal-card">
+            <div class="fin-modal-header">
+                <h3 id="finModalAddSubTitle" class="fin-modal-title">Add Subscription</h3>
+                <button class="fin-modal-close" data-close-modal="finModalAddSub" type="button">&times;</button>
+            </div>
+            <form id="finFormAddSub" class="fin-modal-form">
+                <div class="fin-form-grid">
+                    <div class="fin-form-group">
+                        <label for="finSubName" class="fin-form-label">Service / Provider Name</label>
+                        <input type="text" id="finSubName" class="fin-input" placeholder="e.g. Netflix, Spotify" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finSubAmount" class="fin-form-label">Amount (₹)</label>
+                        <input type="number" id="finSubAmount" class="fin-input" step="0.01" min="0.01" placeholder="649.00" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finSubCycle" class="fin-form-label">Billing Cycle</label>
+                        <select id="finSubCycle" class="fin-select">
+                            <option value="monthly">Monthly</option>
+                            <option value="quarterly">Quarterly</option>
+                            <option value="yearly">Yearly</option>
+                        </select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finSubRenewal" class="fin-form-label">Next Renewal Date</label>
+                        <input type="date" id="finSubRenewal" class="fin-input" required>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finSubCategory" class="fin-form-label">Category</label>
+                        <select id="finSubCategory" class="fin-select"></select>
+                    </div>
+                    <div class="fin-form-group">
+                        <label for="finSubMethod" class="fin-form-label">Payment Method</label>
+                        <input type="text" id="finSubMethod" class="fin-input" placeholder="Credit Card / Auto-debit">
+                    </div>
+                </div>
+                <div class="fin-modal-actions">
+                    <button type="button" class="fin-btn fin-btn-secondary" data-close-modal="finModalAddSub">Cancel</button>
+                    <button type="submit" class="fin-btn fin-btn-primary">Save Subscription</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 5. Pay Bill Modal -->
+    <div id="finModalPayBill" class="fin-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="finModalPayBillTitle">
+        <div class="glass-card fin-modal-card">
+            <div class="fin-modal-header">
+                <h3 id="finModalPayBillTitle" class="fin-modal-title">Record Bill Payment</h3>
+                <button class="fin-modal-close" data-close-modal="finModalPayBill" type="button">&times;</button>
+            </div>
+            <form id="finFormPayBill" class="fin-modal-form">
+                <input type="hidden" id="finPayBillId">
+                <p id="finPayBillPrompt" class="fin-modal-desc">Confirm marking this bill as paid:</p>
+                <div class="fin-form-group" style="margin-top: 1rem;">
+                    <label for="finPayBillMethod" class="fin-form-label">Payment Method Used</label>
+                    <select id="finPayBillMethod" class="fin-select">
+                        <option value="UPI">UPI</option>
+                        <option value="Credit Card">Credit Card</option>
+                        <option value="Debit Card">Debit Card</option>
+                        <option value="Net Banking">Net Banking</option>
+                        <option value="Cash">Cash</option>
+                    </select>
+                </div>
+                <div class="fin-modal-actions">
+                    <button type="button" class="fin-btn fin-btn-secondary" data-close-modal="finModalPayBill">Cancel</button>
+                    <button type="submit" class="fin-btn fin-btn-cyan">Confirm Paid</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/static/orb/orb.js?v=3.0"></script>
     <script src="/static/app.js?v=3.0"></script>
+    <script src="/static/finance_dashboard.js?v=1.0"></script>
 </body>
 </html>

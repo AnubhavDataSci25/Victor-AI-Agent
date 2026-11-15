@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from app.finance.events import broadcast_dashboard_navigation, broadcast_finance_event
 from app.finance.manager import FinanceManager, get_finance_manager
 from app.tools.base import BaseTool
 from app.tools.permissions import PermissionLevel
@@ -109,14 +110,33 @@ class FinanceUpdateTransactionTool(BaseTool):
 
 class FinanceDeleteTransactionTool(BaseTool):
     name = "finance_delete_transaction"
-    description = "Deletes a duplicate or cancelled transaction from persistent storage."
+    description = (
+        "Deletes a financial transaction from persistent storage. "
+        "Can identify the transaction by monthly ID (e.g. 'NOVT001' or '001' or '1'), "
+        "by merchant/payee name (e.g. 'Auto wala'), by amount (e.g. 350), "
+        "or deletes the latest/last transaction if unspecified."
+    )
     permission_level = PermissionLevel.LOW
     parameters = {
         "type": "object",
         "properties": {
-            "transaction_id": {"type": "string", "description": "ID of the transaction to delete."},
+            "transaction_id": {
+                "type": "string",
+                "description": "ID of the transaction to delete (e.g. 'NOVT001', '001', '1', or 'last'/'latest').",
+            },
+            "merchant": {
+                "type": "string",
+                "description": "Optional merchant or payee name to identify the transaction (e.g. 'Auto wala', 'Biryani House').",
+            },
+            "amount": {
+                "type": "number",
+                "description": "Optional transaction amount in rupees to identify the transaction (e.g. 350 or 750).",
+            },
+            "category": {
+                "type": "string",
+                "description": "Optional category to narrow down the transaction (e.g. 'Food', 'Travel').",
+            },
         },
-        "required": ["transaction_id"],
     }
 
     def __init__(self, manager: Optional[FinanceManager] = None) -> None:
@@ -127,11 +147,30 @@ class FinanceDeleteTransactionTool(BaseTool):
 
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
-        txn_id = args.get("transaction_id", "")
-        res = mgr.delete_transaction(txn_id)
+        txn_id = str(args.get("transaction_id") or "").strip() or None
+        merchant = str(args.get("merchant") or "").strip() or None
+        raw_amt = args.get("amount")
+        amount = None
+        if raw_amt is not None:
+            try:
+                amount = float(raw_amt)
+            except (ValueError, TypeError):
+                pass
+        category = str(args.get("category") or "").strip() or None
+
+        res = mgr.delete_transaction(
+            transaction_id=txn_id,
+            merchant=merchant,
+            amount=amount,
+            category=category,
+        )
+
         if res["success"]:
+            actual_id = res.get("transaction_id", txn_id or "unknown")
+            await broadcast_finance_event("transaction_deleted", {"transaction_id": actual_id})
+            await broadcast_dashboard_navigation("transactions")
             return f"Sir, {res['message']}"
-        return f"Error: {res.get('error', 'Transaction not found.')}"
+        return f"Sir, {res.get('error', 'I could not find a matching transaction to delete.')}"
 
 
 class FinanceListTransactionsTool(BaseTool):
@@ -158,6 +197,7 @@ class FinanceListTransactionsTool(BaseTool):
 
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
+        await broadcast_dashboard_navigation("transactions", filters=args)
         limit = args.get("limit", 20)
         txns = mgr.list_transactions(limit=limit, **args)
         if not txns:
@@ -256,6 +296,7 @@ class FinanceManageBillTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
         action = args.get("action", "list").lower()
+        await broadcast_dashboard_navigation("bills")
 
         if action == "create":
             provider = args.get("provider_name", "")
@@ -331,12 +372,13 @@ class FinanceManageBudgetTool(BaseTool):
             "action": {
                 "type": "string",
                 "enum": ["set", "status", "delete"],
-                "description": "Action: 'set' budget limit, 'status' to review utilizations, 'delete' to remove.",
+                "description": "Action: 'set' budget limit, 'status' to review utilizations, 'delete' to remove. Automatically defaults to 'set' if amount is provided.",
             },
-            "name": {"type": "string", "description": "Budget name (e.g. 'Monthly Food Budget', 'Overall Monthly Limit')."},
+            "name": {"type": "string", "description": "Budget name (e.g. 'Overall Monthly Budget', 'Monthly Food Budget')."},
             "limit_amount": {"type": "number", "description": "Maximum spending limit in rupees."},
-            "category": {"type": "string", "description": "Specific category to track (leave empty for overall budget)."},
-            "period": {"type": "string", "enum": ["MONTHLY", "WEEKLY"], "description": "Budget cycle period."},
+            "amount": {"type": "number", "description": "Alias for limit_amount."},
+            "category": {"type": "string", "description": "Specific category to track (use 'All' or leave blank for overall budget)."},
+            "period": {"type": "string", "enum": ["MONTHLY", "WEEKLY"], "description": "Budget cycle period (default: 'MONTHLY')."},
             "budget_id": {"type": "string", "description": "Budget ID for deletion."},
         },
     }
@@ -349,26 +391,51 @@ class FinanceManageBudgetTool(BaseTool):
 
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
-        action = args.get("action", "status").lower()
+        action = str(args.get("action") or "").lower()
+        limit_val = args.get("limit_amount") if args.get("limit_amount") is not None else args.get("amount")
+
+        # Auto-detect 'set' action if limit_val is provided
+        if not action or action not in ("status", "delete"):
+            if limit_val is not None:
+                action = "set"
+            else:
+                action = "status"
 
         if action == "set":
-            name = args.get("name", "Budget")
-            limit = float(args.get("limit_amount", 0.0))
-            cat = args.get("category")
-            period = args.get("period", "MONTHLY")
-
+            limit = float(limit_val or 0.0)
             if limit <= 0:
                 return "Error: limit_amount must be greater than 0."
 
+            cat_input = args.get("category")
+            if cat_input and str(cat_input).strip().lower() in ("all", "overall", "total", "none", "every"):
+                cat = "All"
+            elif cat_input:
+                cat = str(cat_input).strip()
+            else:
+                cat = "All"
+
+            name = args.get("name")
+            if not name:
+                name = "Overall Monthly Budget" if cat == "All" else f"{cat} Budget"
+
+            period = str(args.get("period") or "MONTHLY").upper()
             res = mgr.set_budget(name, limit, period=period, category=cat)
+            
+            # Real-time WebSocket sync & navigation
+            bgt_data = res.get("budget", {})
+            await broadcast_finance_event("budget_updated", bgt_data)
+            await broadcast_dashboard_navigation("budgets")
             return f"Sir, {res['message']}"
 
         elif action == "delete":
-            bid = args.get("budget_id", "")
+            bid = str(args.get("budget_id") or "").strip()
             res = mgr.delete_budget(bid)
+            await broadcast_finance_event("budget_deleted", {"budget_id": bid})
+            await broadcast_dashboard_navigation("budgets")
             return res.get("message") or "Budget not found."
 
         else:
+            await broadcast_dashboard_navigation("budgets")
             status = mgr.get_budget_status()
             if not status:
                 return "Sir, no budgets are currently configured. You can ask me to set an overall or category budget."
@@ -407,6 +474,7 @@ class FinanceManageSubscriptionTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
         action = args.get("action", "list").lower()
+        await broadcast_dashboard_navigation("bills")
 
         if action == "add":
             service = args.get("service_name", "")
@@ -463,6 +531,7 @@ class FinanceGenerateReportTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
         r_type = args.get("report_type", "monthly").lower()
+        await broadcast_dashboard_navigation("analytics", {"report_type": r_type})
         y = args.get("year")
         m = args.get("month")
         dt_str = args.get("date")
@@ -515,6 +584,52 @@ class FinanceGenerateReportTool(BaseTool):
         return "\n".join(lines)
 
 
+class FinanceNavigateDashboardTool(BaseTool):
+    name = "finance_navigate_dashboard"
+    description = (
+        "Navigates Victor's interactive Finance Dashboard to a specific section/tab. "
+        "Supports tabs: 'overview', 'transactions', 'categories', 'budgets', 'bills', 'analytics', 'subscriptions'. "
+        "Allows optional category filter, date filter, or comparison mode."
+    )
+    permission_level = PermissionLevel.SAFE
+    parameters = {
+        "type": "object",
+        "properties": {
+            "tab": {
+                "type": "string",
+                "enum": ["overview", "transactions", "categories", "budgets", "bills", "analytics", "subscriptions"],
+                "description": "Dashboard tab to open.",
+            },
+            "category": {"type": "string", "description": "Optional category filter to apply (e.g. Food, Shopping, Travel)."},
+            "period": {"type": "string", "description": "Optional period (monthly, weekly, daily)."},
+            "date": {"type": "string", "description": "Optional target date (YYYY-MM-DD)."},
+        },
+        "required": ["tab"],
+    }
+
+    def __init__(self, manager: Optional[FinanceManager] = None) -> None:
+        self.manager = manager
+
+    def _mgr(self) -> FinanceManager:
+        return self.manager or get_finance_manager()
+
+    async def execute(self, args: dict[str, Any]) -> str:
+        tab = args.get("tab", "overview").lower()
+        cat = args.get("category")
+        await broadcast_dashboard_navigation(tab, filters=args)
+
+        label_map = {
+            "overview": "Finance Overview",
+            "transactions": f"{cat + ' ' if cat else ''}Transactions",
+            "categories": f"{cat + ' ' if cat else ''}Category Breakdown",
+            "budgets": "Budget Management",
+            "bills": "Upcoming & Pending Bills",
+            "analytics": "Financial Analytics & Reports",
+            "subscriptions": "Active Subscriptions",
+        }
+        return f"Sir, I have opened the Finance Dashboard to your {label_map.get(tab, 'Finance Overview')}."
+
+
 class FinanceQueryTool(BaseTool):
     name = "finance_query"
     description = (
@@ -540,4 +655,23 @@ class FinanceQueryTool(BaseTool):
     async def execute(self, args: dict[str, Any]) -> str:
         mgr = self._mgr()
         q = args.get("question", "")
+        q_lower = q.lower()
+
+        # Contextual dashboard navigation trigger
+        if any(k in q_lower for k in ("afford", "budget", "limit")):
+            await broadcast_dashboard_navigation("budgets")
+        elif any(k in q_lower for k in ("bill", "recharge", "electricity", "rent", "due")):
+            await broadcast_dashboard_navigation("bills")
+        elif any(k in q_lower for k in ("subscription", "recurring", "netflix", "spotify")):
+            await broadcast_dashboard_navigation("subscriptions")
+        elif any(k in q_lower for k in ("compare", "why did i spend more", "trend", "analytics")):
+            await broadcast_dashboard_navigation("analytics", {"mode": "compare"})
+        else:
+            cats = mgr.store.list_categories()
+            matched_cat = next((c for c in cats if c.lower() in q_lower), None)
+            if matched_cat:
+                await broadcast_dashboard_navigation("transactions", {"category": matched_cat})
+            else:
+                await broadcast_dashboard_navigation("overview")
+
         return await mgr.answer_financial_query(q)

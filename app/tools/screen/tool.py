@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ScreenUnderstandTool(BaseTool):
     name = "screen_understand"
+    timeout_seconds = 60.0
     description = (
         "Captures and analyzes the user's current screen using vision AI to understand visible text, "
         "UI elements, forms, buttons, errors, active applications, and overall context. "

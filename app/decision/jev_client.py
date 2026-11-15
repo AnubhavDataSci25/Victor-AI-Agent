@@ -62,7 +62,11 @@ class JevClient:
         if not questions:
             return None
 
-        endpoint = f"{self.config.openrouter_base_url.rstrip('/')}/chat/completions"
+        base_url = self.config.openrouter_base_url.rstrip('/')
+        if "jev" in self.config.jev_model.lower():
+            endpoint = f"{base_url}/api/alpha/decisions"
+        else:
+            endpoint = f"{base_url}/chat/completions"
 
         # Build schema instructions and structured input for OpenRouter /chat/completions
         system_instruction = (

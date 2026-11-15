@@ -58,7 +58,7 @@ def _get_imap_connection() -> imaplib.IMAP4_SSL:
         )
 
     try:
-        conn = imaplib.IMAP4_SSL(server, timeout=15)
+        conn = imaplib.IMAP4_SSL(server, timeout=30)
         conn.login(user, password)
         return conn
     except imaplib.IMAP4.error as e:
