@@ -155,11 +155,19 @@ class LocalSentenceTransformerProvider(BaseEmbeddingProvider):
     def _get_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
+            import torch
 
-            # Force strictly CPU mode (2GB VRAM laptop constraint)
-            logger.info("Loading local embedding model '%s' on CPU...", self.model_name)
-            self._model = SentenceTransformer(self.model_name, device="cpu")
-            self._dim = self._model.get_sentence_embedding_dimension()
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("Loading local embedding model '%s' on %s...", self.model_name, device.upper())
+            try:
+                self._model = SentenceTransformer(self.model_name, device=device)
+            except Exception as e:
+                logger.warning("Failed to initialize embedding model on %s: %s. Falling back to CPU.", device, e)
+                self._model = SentenceTransformer(self.model_name, device="cpu")
+            if hasattr(self._model, "get_embedding_dimension"):
+                self._dim = self._model.get_embedding_dimension()
+            elif hasattr(self._model, "get_sentence_embedding_dimension"):
+                self._dim = self._model.get_sentence_embedding_dimension()
         return self._model
 
     def embed_texts(self, texts: List[str], input_type: str = "passage") -> np.ndarray:

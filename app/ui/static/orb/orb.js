@@ -310,7 +310,7 @@
             this.renderer = new THREE.WebGLRenderer({
                 antialias: false,
                 alpha: true,
-                powerPreference: "high-performance"
+                powerPreference: "low-power" // Offloads Three.js HUD orb rendering to Intel UHD iGPU to preserve NVIDIA VRAM
             });
             this.renderer.setClearColor(0x000000, 0); // Transparent background for HUD layout
             this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));

@@ -327,7 +327,7 @@ async def test_continuous_audio_streaming_and_speech_suppression(session_setup):
 def test_extract_executable_command_prevents_duplicate_greeting():
     from app.agent.session_manager import _extract_executable_command
 
-    # Pure wake words / greetings must return None (suppressed)
+    # Pure wake words, conversational pleasantries, and room chatter must return None (suppressed)
     assert _extract_executable_command("Hello Victor") is None
     assert _extract_executable_command("hello victor") is None
     assert _extract_executable_command("Victor") is None
@@ -337,12 +337,23 @@ def test_extract_executable_command_prevents_duplicate_greeting():
     assert _extract_executable_command("Good morning Victor") is None
     assert _extract_executable_command("Yes") is None
     assert _extract_executable_command("Okay") is None
+    assert _extract_executable_command("15 January") is None
+    assert _extract_executable_command("random room noise") is None
+    assert _extract_executable_command("hello victor how are you") is None
+    assert _extract_executable_command("how are you") is None
+    assert _extract_executable_command("can you hear me") is None
+    assert _extract_executable_command("are you there") is None
+    assert _extract_executable_command("what's up") is None
+    assert _extract_executable_command("good evening") is None
 
     # Actual commands with wake-up prefixes must cleanly strip the greeting
     assert _extract_executable_command("Hello Victor, what is the weather in Delhi?") == "what is the weather in Delhi?"
     assert _extract_executable_command("Hey Victor open YouTube") == "open YouTube"
     assert _extract_executable_command("Victor, check my emails") == "check my emails"
     assert _extract_executable_command("What time is it?") == "What time is it?"
+    assert _extract_executable_command("Victor, open memory") == "open memory"
+    assert _extract_executable_command("open finance dashboard") == "open finance dashboard"
+    assert _extract_executable_command("switch to document rag") == "switch to document rag"
 
 
 

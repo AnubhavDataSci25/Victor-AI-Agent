@@ -273,8 +273,27 @@ class CameraDriver:
                     height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
                     fps = 20.0
 
-                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                    out = cv2.VideoWriter(str(target_path), fourcc, fps, (width, height))
+                    # Phase 2 Video Offloading: Intel Quick Sync Video (QSV) via Windows Media Foundation (MSMF)
+                    out = None
+                    for api, codec_str in [
+                        (cv2.CAP_MSMF, "H264"),
+                        (cv2.CAP_MSMF, "avc1"),
+                        (cv2.CAP_ANY, "H264"),
+                        (cv2.CAP_ANY, "mp4v"),
+                    ]:
+                        try:
+                            fourcc = cv2.VideoWriter_fourcc(*codec_str)
+                            candidate = cv2.VideoWriter(str(target_path), api, fourcc, fps, (width, height))
+                            if candidate.isOpened():
+                                out = candidate
+                                logger.info(f"[Camera] VideoWriter initialized with {codec_str} via backend {api} (Hardware QSV/MSMF).")
+                                break
+                        except Exception:
+                            continue
+
+                    if out is None or not out.isOpened():
+                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                        out = cv2.VideoWriter(str(target_path), fourcc, fps, (width, height))
 
                     start_time = time.time()
                     total_frames = 0

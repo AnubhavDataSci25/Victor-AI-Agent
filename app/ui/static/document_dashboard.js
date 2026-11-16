@@ -18,11 +18,13 @@
             const view = document.getElementById('documentDashboardView');
             const grid = document.querySelector('.hud-command-grid');
             const quickActions = document.querySelector('.quick-actions-bar');
+            const headerStrip = document.querySelector('.workspace-header-strip');
             const moduleDrawer = document.getElementById('moduleDrawer');
 
             if (view) view.classList.remove('hidden');
             if (grid) grid.classList.add('hidden');
             if (quickActions) quickActions.classList.add('hidden');
+            if (headerStrip) headerStrip.classList.add('hidden');
             if (moduleDrawer) moduleDrawer.classList.add('hidden');
 
             document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
@@ -36,11 +38,13 @@
             const view = document.getElementById('documentDashboardView');
             const grid = document.querySelector('.hud-command-grid');
             const quickActions = document.querySelector('.quick-actions-bar');
+            const headerStrip = document.querySelector('.workspace-header-strip');
 
             if (view) view.classList.add('hidden');
             if (restoreDashboard) {
                 if (grid) grid.classList.remove('hidden');
                 if (quickActions) quickActions.classList.remove('hidden');
+                if (headerStrip) headerStrip.classList.remove('hidden');
                 document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
                     b.classList.toggle('is-active', b.dataset.view === 'dashboard');
                 });
@@ -666,6 +670,13 @@
                 }
             });
         }
+
+        // Close modal when clicking on overlay background backdrop
+        document.querySelectorAll('.doc-modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) overlay.classList.add('hidden');
+            });
+        });
     });
 
 })();

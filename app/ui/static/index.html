@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=3.0">
+    <link rel="stylesheet" href="/static/style.css?v=3.1">
 </head>
 <body>
     <div class="hud-app">
@@ -266,39 +266,41 @@
                             </div>
                         </div>
 
-                        <!-- 3. Audio Pipeline -->
+                        <!-- 3. Audio & Acceleration Pipeline -->
                         <div class="glass-card info-card">
                             <div class="info-card-header">
                                 <div class="info-card-title-wrap">
                                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00D9FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
-                                    <span>Audio Pipeline</span>
+                                    <span>Neural Pipeline</span>
                                 </div>
+                                <span class="model-badge" id="gpuStatusBadge">GPU READY</span>
                             </div>
                             <div class="pipeline-pills">
                                 <div class="pipeline-pill" id="sttPipelinePill">
                                     <div class="pipeline-pill-top">
                                         <span class="pipeline-dot"></span>
-                                        <span>Whisper.cpp</span>
+                                        <span>Whisper STT</span>
                                     </div>
-                                    <span class="pipeline-sub" id="sttStatusLabel">(STT Active)</span>
+                                    <span class="pipeline-sub" id="sttStatusLabel">(GPU Fallback)</span>
                                 </div>
-                                <div class="pipeline-pill" id="ttsPipelinePill">
+                                <div class="pipeline-pill" id="vadPipelinePill">
                                     <div class="pipeline-pill-top">
                                         <span class="pipeline-dot"></span>
-                                        <span>Piper TTS</span>
+                                        <span>Audio VAD</span>
                                     </div>
-                                    <span class="pipeline-sub" id="ttsStatusLabel">(Voice - Male)</span>
+                                    <span class="pipeline-sub" id="vadStatusLabel">(Neural CUDA)</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- 4. System Health -->
+                        <!-- 4. System Health & Hardware Telemetry -->
                         <div class="glass-card info-card">
                             <div class="info-card-header">
                                 <div class="info-card-title-wrap">
                                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00D9FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                                     <span>System Health</span>
                                 </div>
+                                <span class="fin-badge-cyan" id="gpuDeviceLabel" style="font-size: 0.68rem; padding: 2px 7px;">GPU ACTIVE</span>
                             </div>
                             <div class="health-rows">
                                 <div class="health-row">
@@ -311,6 +313,16 @@
                                     <div class="health-bar-track"><div class="health-bar-fill health-bar-fill--ram" id="ramBar" style="width: 0%"></div></div>
                                     <span class="health-val" id="ramVal">--%</span>
                                 </div>
+                                <div class="health-row" id="gpuHealthRow">
+                                    <span class="health-label">GPU</span>
+                                    <div class="health-bar-track"><div class="health-bar-fill health-bar-fill--gpu" id="gpuBar" style="width: 0%"></div></div>
+                                    <span class="health-val" id="gpuVal">--%</span>
+                                </div>
+                                <div class="health-row" id="vramHealthRow">
+                                    <span class="health-label">VRAM</span>
+                                    <div class="health-bar-track"><div class="health-bar-fill health-bar-fill--vram" id="vramBar" style="width: 0%"></div></div>
+                                    <span class="health-val" id="vramVal">-- MB</span>
+                                </div>
                                 <div class="health-row">
                                     <span class="health-label">DISK</span>
                                     <div class="health-bar-track"><div class="health-bar-fill health-bar-fill--disk" id="diskBar" style="width: 0%"></div></div>
@@ -318,7 +330,7 @@
                                 </div>
                             </div>
                             <div class="health-net-footer">
-                                <span>Network Uplink</span>
+                                <span id="gpuTempFooter">GPU: MX330</span>
                                 <span class="net-status-badge" id="netStatusBadge">Checking...</span>
                             </div>
                         </div>
@@ -1380,9 +1392,9 @@
 
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="/static/orb/orb.js?v=3.0"></script>
-    <script src="/static/app.js?v=3.0"></script>
-    <script src="/static/finance_dashboard.js?v=1.0"></script>
-    <script src="/static/document_dashboard.js?v=1.0"></script>
+    <script src="/static/orb/orb.js?v=3.2"></script>
+    <script src="/static/app.js?v=3.3"></script>
+    <script src="/static/finance_dashboard.js?v=3.2"></script>
+    <script src="/static/document_dashboard.js?v=3.2"></script>
 </body>
 </html>

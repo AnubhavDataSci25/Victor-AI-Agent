@@ -981,6 +981,10 @@ ws.onmessage = (event) => {
             console.log(`[Victor Session State] ${currentState}`);
             updateUIState(currentState);
 
+            if (currentState !== "BIOMETRIC_PENDING") {
+                stopFirstCommandListener();
+            }
+
             if (currentState === "LOCKED" || currentState === "CLOSED" || currentState === "OFFLINE") {
                 stopFirstCommandListener();
                 try { window.speechSynthesis.cancel(); } catch (_) {}
@@ -1007,7 +1011,7 @@ ws.onmessage = (event) => {
                 try { window.speechSynthesis.cancel(); } catch (_) {}
                 isVictorSpeaking = false;
                 currentUtterance = null;
-                micMutedUntil = 0;
+                micMutedUntil = Math.max(micMutedUntil || 0, Date.now() + 600); // Prevent speaker echo bleed
                 if (authOverlay) {
                     authOverlay.style.display = "none";
                 }
@@ -1082,7 +1086,7 @@ ws.onmessage = (event) => {
             try { window.speechSynthesis.cancel(); } catch (_) {}
             isVictorSpeaking = false;
             currentUtterance = null;
-            micMutedUntil = Date.now() + 400; // Small grace period for speaker reverb decay
+            micMutedUntil = Date.now() + 600; // Small grace period for speaker reverb decay
             if (audioCtx && audioCtx.state === 'suspended') {
                 audioCtx.resume();
             }
@@ -1152,10 +1156,31 @@ ws.onmessage = (event) => {
                 appendTranscriptEntry("assistant", `👁️ Visual Analysis: ${message.text}`);
             }
         } else if (message.type === "dashboard_navigate") {
-            if (message.section === "finance" && window.FinanceDashboard) {
-                window.FinanceDashboard.handleNavigation(message.tab, message.filters);
-            } else if (message.section === "documents" && window.DocumentDashboard) {
-                window.DocumentDashboard.handleNavigation(message.tab, message);
+            const dest = message.destination || message.section;
+            const tab = message.tab;
+            const action = message.action || (message.filters && message.filters.action);
+
+            if (dest === "__BACK__" || action === "back") {
+                navigateHistoryBack();
+            } else if (dest === "finance") {
+                openModuleView("finance");
+                if (window.FinanceDashboard) {
+                    if (tab) window.FinanceDashboard.switchTab(tab);
+                    if (message.filters) window.FinanceDashboard.handleNavigation(tab, message.filters);
+                }
+            } else if (dest === "documents") {
+                openModuleView("documents");
+                if (window.DocumentDashboard) {
+                    const targetTab = tab === "study" ? "notes" : (tab || "library");
+                    window.DocumentDashboard.switchTab(targetTab);
+                    if (message.payload || message.summary) {
+                        window.DocumentDashboard.handleNavigation(targetTab, message.payload || message);
+                    }
+                }
+            } else if (dest === "dashboard" || dest === "home") {
+                openModuleView("dashboard");
+            } else if (dest && (MODULE_DEFINITIONS[dest] || dest === "settings")) {
+                openModuleView(dest);
             }
         } else if (message.type === "finance_update") {
             if (window.FinanceDashboard) {
@@ -1323,6 +1348,12 @@ if (btnClosePhoneModal) {
     });
 }
 
+if (phonePairingModal) {
+    phonePairingModal.addEventListener("click", (e) => {
+        if (e.target === phonePairingModal) phonePairingModal.classList.add("hidden");
+    });
+}
+
 if (btnGeneratePairingCode) {
     btnGeneratePairingCode.addEventListener("click", () => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1389,10 +1420,19 @@ async function refreshSystemHealth() {
         const cpuVal = document.getElementById('cpuVal');
         const ramBar = document.getElementById('ramBar');
         const ramVal = document.getElementById('ramVal');
+        const gpuBar = document.getElementById('gpuBar');
+        const gpuVal = document.getElementById('gpuVal');
+        const vramBar = document.getElementById('vramBar');
+        const vramVal = document.getElementById('vramVal');
         const diskBar = document.getElementById('diskBar');
         const diskVal = document.getElementById('diskVal');
         const netBadge = document.getElementById('netStatusBadge');
         const modelEl = document.getElementById('activeModelName');
+        const gpuDeviceLabel = document.getElementById('gpuDeviceLabel');
+        const gpuTempFooter = document.getElementById('gpuTempFooter');
+        const gpuStatusBadge = document.getElementById('gpuStatusBadge');
+        const vadStatusLabel = document.getElementById('vadStatusLabel');
+        const sttStatusLabel = document.getElementById('sttStatusLabel');
 
         const cpuPct = Math.round(Number(data.cpu_pct || 0));
         const ramPct = Math.round(Number(data.ram_pct || 0));
@@ -1404,6 +1444,44 @@ async function refreshSystemHealth() {
         if (ramVal) ramVal.textContent = `${ramPct}%`;
         if (diskBar) diskBar.style.width = `${diskPct}%`;
         if (diskVal) diskVal.textContent = `${diskPct}%`;
+
+        // GPU & VRAM Live Telemetry
+        if (data.gpu_available) {
+            const gpuPct = Math.round(Number(data.gpu_pct || 0));
+            const vramPct = Math.round(Number(data.gpu_vram_pct || 0));
+            const vramUsed = Math.round(Number(data.gpu_vram_used_mb || 0));
+            const vramTotal = Math.round(Number(data.gpu_vram_total_mb || 2048));
+
+            if (gpuBar) gpuBar.style.width = `${Math.min(100, gpuPct)}%`;
+            if (gpuVal) gpuVal.textContent = `${gpuPct}%`;
+            if (vramBar) vramBar.style.width = `${Math.min(100, vramPct)}%`;
+            if (vramVal) vramVal.textContent = `${vramUsed} / ${vramTotal} MB`;
+
+            if (gpuDeviceLabel) {
+                const shortName = (data.gpu_name || 'CUDA').replace('NVIDIA ', '').replace('GeForce ', '');
+                gpuDeviceLabel.textContent = `${shortName} ACTIVE`;
+            }
+            if (gpuTempFooter) {
+                const tempStr = data.gpu_temp_c ? ` • ${Math.round(data.gpu_temp_c)}°C` : '';
+                gpuTempFooter.textContent = `GPU: ${gpuPct}%${tempStr}`;
+            }
+            if (gpuStatusBadge) {
+                gpuStatusBadge.textContent = 'CUDA READY';
+                gpuStatusBadge.style.borderColor = 'rgba(0, 217, 255, 0.4)';
+            }
+            if (vadStatusLabel) vadStatusLabel.textContent = data.vad_device ? `(${data.vad_device})` : '(Neural CUDA)';
+            if (sttStatusLabel) sttStatusLabel.textContent = data.stt_device ? `(${data.stt_device})` : '(GPU Fallback)';
+        } else {
+            if (gpuBar) gpuBar.style.width = '0%';
+            if (gpuVal) gpuVal.textContent = 'OFF';
+            if (vramBar) vramBar.style.width = '0%';
+            if (vramVal) vramVal.textContent = 'CPU Mode';
+            if (gpuDeviceLabel) gpuDeviceLabel.textContent = 'CPU MODE';
+            if (gpuTempFooter) gpuTempFooter.textContent = 'GPU: Offline';
+            if (gpuStatusBadge) gpuStatusBadge.textContent = 'CPU ONLY';
+            if (vadStatusLabel) vadStatusLabel.textContent = '(CPU VAD)';
+            if (sttStatusLabel) sttStatusLabel.textContent = '(CPU Fallback)';
+        }
         if (netBadge) {
             netBadge.textContent = data.network_online ? 'ONLINE' : 'LOCAL';
             netBadge.style.color = data.network_online ? 'var(--accent-emerald)' : 'var(--accent-amber)';
@@ -1565,16 +1643,34 @@ const moduleDrawerTitle = document.getElementById('moduleDrawerTitle');
 const moduleCardsGrid = document.getElementById('moduleCardsGrid');
 const moduleCloseBtn = document.getElementById('moduleCloseBtn');
 
-function openModuleView(viewKey) {
+let currentDashboardView = 'dashboard';
+const dashboardNavHistory = [];
+
+function navigateHistoryBack() {
+    const prev = dashboardNavHistory.pop() || 'dashboard';
+    openModuleView(prev, true);
+}
+
+function openModuleView(viewKey, isBackAction = false) {
+    if (!isBackAction && currentDashboardView !== viewKey) {
+        dashboardNavHistory.push(currentDashboardView);
+        if (dashboardNavHistory.length > 30) dashboardNavHistory.shift();
+    }
+    currentDashboardView = viewKey;
+
     document.querySelectorAll('.sidebar-item, .topnav-item').forEach(btn => {
         btn.classList.toggle('is-active', btn.dataset.view === viewKey);
     });
 
     const grid = document.querySelector('.hud-command-grid');
     const quickActions = document.querySelector('.quick-actions-bar');
+    const headerStrip = document.querySelector('.workspace-header-strip');
 
     if (viewKey === 'finance') {
         if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        if (grid) grid.classList.add('hidden');
+        if (quickActions) quickActions.classList.add('hidden');
+        if (headerStrip) headerStrip.classList.add('hidden');
         if (window.DocumentDashboard) window.DocumentDashboard.hide(false);
         if (window.FinanceDashboard) {
             window.FinanceDashboard.show();
@@ -1582,6 +1678,9 @@ function openModuleView(viewKey) {
         return;
     } else if (viewKey === 'documents') {
         if (moduleDrawer) moduleDrawer.classList.add('hidden');
+        if (grid) grid.classList.add('hidden');
+        if (quickActions) quickActions.classList.add('hidden');
+        if (headerStrip) headerStrip.classList.add('hidden');
         if (window.FinanceDashboard) window.FinanceDashboard.hide(false);
         if (window.DocumentDashboard) {
             window.DocumentDashboard.show();
@@ -1596,6 +1695,7 @@ function openModuleView(viewKey) {
         }
         if (grid) grid.classList.remove('hidden');
         if (quickActions) quickActions.classList.remove('hidden');
+        if (headerStrip) headerStrip.classList.remove('hidden');
     }
 
     if (viewKey === 'dashboard' || !MODULE_DEFINITIONS[viewKey]) {
@@ -1638,6 +1738,39 @@ document.querySelectorAll('.sidebar-item, .topnav-item').forEach(btn => {
 if (moduleCloseBtn) {
     moduleCloseBtn.addEventListener('click', () => openModuleView('dashboard'));
 }
+
+const userProfileBtn = document.getElementById('userProfileBtn');
+if (userProfileBtn) {
+    userProfileBtn.addEventListener('click', () => openModuleView('settings'));
+}
+
+// Global Escape Key Listener for dismissible overlays and drawers
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (phonePairingModal && !phonePairingModal.classList.contains('hidden')) {
+            phonePairingModal.classList.add('hidden');
+            return;
+        }
+        if (notificationsPopover && !notificationsPopover.classList.contains('hidden')) {
+            notificationsPopover.classList.add('hidden');
+            return;
+        }
+        const openFinModal = document.querySelector('.fin-modal-overlay:not(.hidden)');
+        if (openFinModal) {
+            openFinModal.classList.add('hidden');
+            return;
+        }
+        const openDocModal = document.querySelector('.doc-modal-overlay:not(.hidden)');
+        if (openDocModal) {
+            openDocModal.classList.add('hidden');
+            return;
+        }
+        if (moduleDrawer && !moduleDrawer.classList.contains('hidden')) {
+            openModuleView('dashboard');
+            return;
+        }
+    }
+});
 
 // 4. Bottom Quick Actions Integration
 const QUICK_ACTION_MAP = {

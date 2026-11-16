@@ -129,11 +129,13 @@
             const view = document.getElementById('financeDashboardView');
             const grid = document.querySelector('.hud-command-grid');
             const quickActions = document.querySelector('.quick-actions-bar');
+            const headerStrip = document.querySelector('.workspace-header-strip');
             const moduleDrawer = document.getElementById('moduleDrawer');
 
             if (view) view.classList.remove('hidden');
             if (grid) grid.classList.add('hidden');
             if (quickActions) quickActions.classList.add('hidden');
+            if (headerStrip) headerStrip.classList.add('hidden');
             if (moduleDrawer) moduleDrawer.classList.add('hidden');
 
             document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
@@ -147,11 +149,13 @@
             const view = document.getElementById('financeDashboardView');
             const grid = document.querySelector('.hud-command-grid');
             const quickActions = document.querySelector('.quick-actions-bar');
+            const headerStrip = document.querySelector('.workspace-header-strip');
 
             if (view) view.classList.add('hidden');
             if (restoreDashboard) {
                 if (grid) grid.classList.remove('hidden');
                 if (quickActions) quickActions.classList.remove('hidden');
+                if (headerStrip) headerStrip.classList.remove('hidden');
                 document.querySelectorAll('.sidebar-item, .topnav-item').forEach(b => {
                     b.classList.toggle('is-active', b.dataset.view === 'dashboard');
                 });
@@ -700,22 +704,39 @@
             });
         },
 
-        renderAnalytics() {
+        renderAnalytics(period) {
             if (!this.summary) return;
+
+            const periodSelect = document.getElementById('finAnalyticsPeriodSelect');
+            const selectedPeriod = period || (periodSelect ? periodSelect.value : 'monthly');
 
             const inflowEl = document.getElementById('finAnaInflow');
             const outflowEl = document.getElementById('finAnaOutflow');
             const savingsEl = document.getElementById('finAnaSavings');
             const burnRateEl = document.getElementById('finAnaBurnRate');
 
-            if (inflowEl) inflowEl.textContent = this.formatCurrency(this.summary.total_income || 0);
-            if (outflowEl) outflowEl.textContent = this.formatCurrency(this.summary.total_expenses || 0);
-            if (savingsEl) savingsEl.textContent = this.formatCurrency(this.summary.net_savings || 0);
-            if (burnRateEl) {
-                const daysInMonth = 30;
-                const daily = (this.summary.total_expenses || 0) / daysInMonth;
-                burnRateEl.textContent = `${this.formatCurrency(daily)}/day`;
+            let mult = 1.0;
+            let burnLabel = '/day';
+            const daysInMonth = 30;
+            const daily = (this.summary.total_expenses || 0) / daysInMonth;
+
+            if (selectedPeriod === 'weekly') {
+                mult = 7.0 / daysInMonth;
+                burnLabel = '/week';
+            } else if (selectedPeriod === 'annual') {
+                mult = 12.0;
+                burnLabel = '/year';
             }
+
+            const inflowVal = (this.summary.total_income || 0) * mult;
+            const outflowVal = (this.summary.total_expenses || 0) * mult;
+            const savingsVal = (this.summary.net_savings || 0) * mult;
+            const burnVal = selectedPeriod === 'weekly' ? (daily * 7) : (selectedPeriod === 'annual' ? (daily * 365) : daily);
+
+            if (inflowEl) inflowEl.textContent = this.formatCurrency(inflowVal);
+            if (outflowEl) outflowEl.textContent = this.formatCurrency(outflowVal);
+            if (savingsEl) savingsEl.textContent = this.formatCurrency(savingsVal);
+            if (burnRateEl) burnRateEl.textContent = `${this.formatCurrency(burnVal)}${burnLabel}`;
 
             // Set up default comparison inputs if empty
             const m1 = document.getElementById('finCmpMonth1');
@@ -960,6 +981,13 @@
             if (typeFilter) typeFilter.addEventListener('change', () => this.renderTransactions());
             if (catFilter) catFilter.addEventListener('change', () => this.renderTransactions());
             if (methodFilter) methodFilter.addEventListener('change', () => this.renderTransactions());
+
+            const analyticsPeriodSelect = document.getElementById('finAnalyticsPeriodSelect');
+            if (analyticsPeriodSelect) {
+                analyticsPeriodSelect.addEventListener('change', () => {
+                    this.renderAnalytics(analyticsPeriodSelect.value);
+                });
+            }
 
             if (resetBtn) {
                 resetBtn.addEventListener('click', () => {

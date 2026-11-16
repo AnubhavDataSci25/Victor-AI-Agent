@@ -453,6 +453,14 @@ def build_tool_registry(allowed_roots: list[Path] | None = None) -> ToolRegistry
     except Exception as e:
         logger.warning(f"Document Intelligence & RAG tools unavailable: {e}")
 
+    # --- Dashboard Voice & Text Navigation Tools ---
+    try:
+        from app.tools.navigation import DashboardNavigateTool
+        registry.register(DashboardNavigateTool())
+        logger.info("Registered Dashboard Navigation tools.")
+    except Exception as e:
+        logger.warning(f"Dashboard Navigation tools unavailable: {e}")
+
     tool_count = len(registry.list_tools())
     logger.info(f"Tool registry built with {tool_count} tools.")
     return registry

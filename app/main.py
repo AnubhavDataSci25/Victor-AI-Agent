@@ -1,4 +1,6 @@
 import sys
+import os
+import time
 import asyncio
 import json
 import base64
@@ -37,6 +39,7 @@ from app.reminders.scheduler import get_global_reminder_scheduler
 from app.finance.api import router as finance_router
 from app.finance.events import register_ui_listener, unregister_ui_listener, set_finance_event_loop
 from app.rag.events import register_ui_listener as register_rag_ui_listener, unregister_ui_listener as unregister_rag_ui_listener, set_rag_event_loop
+from app.navigation import register_navigation_ui_listener, unregister_navigation_ui_listener
 from app.rag.api import router as rag_router
 
 app.include_router(finance_router)
@@ -110,8 +113,73 @@ async def root():
     )
 
 
+_last_gpu_check = 0.0
+_cached_gpu_info = {
+    "gpu_available": False,
+    "gpu_name": "N/A",
+    "gpu_pct": 0.0,
+    "gpu_vram_used_mb": 0.0,
+    "gpu_vram_total_mb": 0.0,
+    "gpu_vram_pct": 0.0,
+    "gpu_temp_c": 0.0,
+    "rag_device": "CPU",
+    "vad_device": "CPU",
+    "stt_device": "CPU",
+}
+
+
+def _collect_gpu_health() -> dict:
+    global _last_gpu_check, _cached_gpu_info
+    now = time.time()
+    if now - _last_gpu_check < 1.0:
+        return _cached_gpu_info
+
+    _last_gpu_check = now
+    info = dict(_cached_gpu_info)
+
+    try:
+        import subprocess
+        smi_path = r"C:\Windows\System32\nvidia-smi.exe"
+        if os.path.exists(smi_path):
+            res = subprocess.run(
+                [smi_path, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=1.2
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                parts = [p.strip() for p in res.stdout.strip().split(",")]
+                if len(parts) >= 5:
+                    v_used = float(parts[2])
+                    v_total = float(parts[3])
+                    info.update({
+                        "gpu_available": True,
+                        "gpu_name": parts[0],
+                        "gpu_pct": float(parts[1]),
+                        "gpu_vram_used_mb": v_used,
+                        "gpu_vram_total_mb": v_total,
+                        "gpu_vram_pct": round((v_used / v_total) * 100.0, 1) if v_total > 0 else 0.0,
+                        "gpu_temp_c": float(parts[4]),
+                    })
+    except Exception:
+        pass
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            info["gpu_available"] = True
+            if not info.get("gpu_name") or info["gpu_name"] == "N/A":
+                info["gpu_name"] = torch.cuda.get_device_name(0)
+            info["rag_device"] = "GPU (CUDA)"
+            info["vad_device"] = "GPU (CUDA)"
+            info["stt_device"] = "GPU (CUDA)"
+    except Exception:
+        pass
+
+    _cached_gpu_info = info
+    return info
+
+
 def _collect_system_health() -> dict:
-    """Collect real-time CPU, RAM, Disk, and Network metrics for the HUD."""
+    """Collect real-time CPU, RAM, GPU, Disk, and Network metrics for the HUD."""
     import shutil
     import socket
     cpu_pct = 0.0
@@ -180,7 +248,9 @@ def _collect_system_health() -> dict:
     except Exception:
         network_online = False
 
-    return {
+    gpu_health = _collect_gpu_health()
+
+    res = {
         "cpu_pct": cpu_pct,
         "ram_pct": ram_pct,
         "ram_used_gb": ram_used_gb,
@@ -189,6 +259,8 @@ def _collect_system_health() -> dict:
         "network_online": network_online,
         "model": "Gemini 3.8 Live",
     }
+    res.update(gpu_health)
+    return res
 
 
 @app.get("/api/system-health")
@@ -258,6 +330,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Register UI listener for real-time finance synchronization
     register_ui_listener(ws_send)
     register_rag_ui_listener(ws_send)
+    register_navigation_ui_listener(ws_send)
 
     try:
         while True:
@@ -340,6 +413,7 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         unregister_ui_listener(ws_send)
         unregister_rag_ui_listener(ws_send)
+        unregister_navigation_ui_listener(ws_send)
 
 
 if __name__ == "__main__":

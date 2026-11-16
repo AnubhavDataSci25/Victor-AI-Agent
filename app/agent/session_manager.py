@@ -60,7 +60,21 @@ _STANDALONE_WAKE_WORDS = {
     "ok victor", "okay victor", "alright victor", "wake up", "wake up victor",
     "start", "listen", "are you there", "yes", "okay", "ok", "proceed",
     "good morning", "good morning victor", "good afternoon", "good afternoon victor",
-    "good evening", "good evening victor"
+    "good evening", "good evening victor", "victor hello", "victor hey", "victor hi",
+    "how are you", "how are you victor", "how are you doing", "can you hear me",
+    "what's up", "whats up", "how's it going", "hows it going", "hello how are you",
+    "hey how are you", "testing", "test", "one two three", "help",
+}
+
+_COMMON_ACTION_VERBS = {
+    "open", "launch", "start", "show", "display", "switch", "navigate", "go",
+    "close", "exit", "quit", "analyze", "analyse", "summarize", "summarise",
+    "read", "explain", "search", "find", "lookup", "look", "query", "check",
+    "compare", "scan", "generate", "create", "write", "make", "record",
+    "update", "delete", "remove", "add", "set", "adjust", "increase", "decrease",
+    "mute", "unmute", "turn", "call", "dial", "answer", "reject", "send",
+    "compose", "draft", "schedule", "remind", "remember", "recall", "tell",
+    "what", "how", "who", "where", "when", "why", "can", "could", "would", "is", "are"
 }
 
 
@@ -68,7 +82,8 @@ def _extract_executable_command(command_text: str) -> Optional[str]:
     """
     Extracts the actionable request from an initial trigger command by stripping
     wake words and greeting prefixes. If the command was purely a wake-up
-    phrase (e.g., 'Hello Victor', 'Victor', 'Hey Victor', 'Hi'), returns None.
+    phrase (e.g., 'Hello Victor', 'Victor', 'Hey Victor', 'Hi', 'how are you'),
+    or random room chatter/noise (e.g. '15 January'), returns None.
     This prevents Gemini Live from generating a redundant second greeting
     after Victor's biometric verification success greeting has already played.
     """
@@ -77,21 +92,38 @@ def _extract_executable_command(command_text: str) -> Optional[str]:
 
     cleaned = command_text.strip()
     normalized = re.sub(r"[^\w\s]", "", cleaned.lower()).strip()
-    if normalized in _STANDALONE_WAKE_WORDS:
+    if not normalized or normalized in _STANDALONE_WAKE_WORDS:
         return None
 
+    # Iteratively strip wake words and salutations
     working = cleaned
-    for pattern in _WAKE_GREETING_PATTERNS:
-        match = re.match(pattern, working, flags=re.IGNORECASE)
-        if match:
-            working = working[match.end():].lstrip(" ,:;-!?.")
-            break
+    changed = True
+    while changed:
+        changed = False
+        for pattern in _WAKE_GREETING_PATTERNS:
+            match = re.match(pattern, working, flags=re.IGNORECASE)
+            if match:
+                working = working[match.end():].lstrip(" ,:;-!?.")
+                changed = True
+                break
 
     working = working.strip()
-    if working and re.sub(r"[^\w\s]", "", working.lower()).strip() not in _STANDALONE_WAKE_WORDS:
-        return working
+    norm_working = re.sub(r"[^\w\s]", "", working.lower()).strip()
+    if not norm_working or norm_working in _STANDALONE_WAKE_WORDS:
+        return None
 
-    return None
+    # Must contain an action verb or be addressed to Victor with substantive intent
+    words = norm_working.split()
+    first_word = words[0] if words else ""
+    if first_word not in _COMMON_ACTION_VERBS and len(words) < 2:
+        return None
+
+    # If original command had no wake word, it must start with an explicit action verb
+    had_wake_word = (working != cleaned)
+    if not had_wake_word and first_word not in _COMMON_ACTION_VERBS:
+        return None
+
+    return working
 
 
 
@@ -138,6 +170,14 @@ class VictorSessionManager:
             on_turn_finalized=self._on_turn_finalized,
             on_turn_timeout=self._on_turn_timeout,
         )
+
+        # GPU / Local STT Fallback Engine
+        try:
+            from app.voice.stt_fallback import get_gpu_stt_fallback
+            self.stt_fallback = get_gpu_stt_fallback()
+        except Exception as e:
+            logger.debug(f"Failed to initialize STT fallback: {e}")
+            self.stt_fallback = None
 
         # Camera & Live Visual Analyzer UI Callbacks
         try:
@@ -350,6 +390,8 @@ class VictorSessionManager:
 
             if connected:
                 await self.set_state(VictorState.ACTIVE)
+                if hasattr(self, "turn_manager"):
+                    self.turn_manager.reset()
                 self.watchdog_task = asyncio.create_task(self._inactivity_watchdog())
                 self._is_verifying_biometric = False
                 log_event(logger, logging.INFO, "biometric_auth_complete_session_active")
@@ -357,10 +399,10 @@ class VictorSessionManager:
                     executable_cmd = _extract_executable_command(self._pending_first_command)
                     if executable_cmd:
                         logger.info(f"Executing pending first command after authentication: '{executable_cmd}'")
-                        await self.live_session.send_text(executable_cmd)
+                        await self.handle_command(executable_cmd)
                     else:
                         logger.info(
-                            f"Pending first command '{self._pending_first_command}' was a wake-up greeting; "
+                            f"Pending first command '{self._pending_first_command}' was a wake-up greeting or non-actionable phrase; "
                             "suppressed redundant dispatch to Gemini Live to prevent duplicate assistance greeting."
                         )
                 return True
@@ -451,8 +493,9 @@ class VictorSessionManager:
                 "type": "orb_state",
                 "state": "THINKING",
             })
+            if hasattr(self.live_session, "start_turn_watchdog"):
+                self.live_session.start_turn_watchdog(8.0)
             await self.live_session.send_activity_end()
-            await self.live_session.send_audio_stream_end()
 
         if loop and loop.is_running():
             asyncio.run_coroutine_threadsafe(_dispatch_finalized(), loop)
@@ -545,6 +588,25 @@ class VictorSessionManager:
             "role": "user",
             "text": command_text,
         })
+
+        # Check for fast-path deterministic voice/text dashboard navigation
+        try:
+            from app.navigation import get_navigation_registry, get_navigation_controller
+            nav_intent = get_navigation_registry().match_intent_from_text(command_text)
+            if nav_intent:
+                nav_res = await get_navigation_controller().execute_intent(nav_intent)
+                await self.websocket_send_callback({
+                    "type": "transcript",
+                    "role": "assistant",
+                    "text": nav_res.spoken_feedback,
+                })
+                await self.websocket_send_callback({
+                    "type": "speak",
+                    "text": nav_res.spoken_feedback,
+                })
+                return True
+        except Exception as nav_err:
+            logger.debug(f"Navigation fast-path check failed: {nav_err}")
 
         # Check for pending memory confirmation (User Consent Flow)
         if hasattr(self, "memory") and self.memory.get_pending_memory():

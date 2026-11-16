@@ -89,6 +89,7 @@ class TurnManagerConfig:
     continuation_extension_sec: float = 1.8 # Extra allowance if trailing speech has connective word
     max_waiting_duration_sec: float = 12.0 # 10 - 15s: Hard cutoff after last speech burst
     max_utterance_duration_sec: float = 90.0 # 60 - 120s: Safety cap for single turn
+    dispatched_max_duration_sec: float = 7.0 # 6 - 8s: Auto-rearm watchdog cap if upstream server stalls
 
     # Speech sensitivity & noise adaptation
     min_speech_duration_sec: float = 0.35  # Ignore transient pops, clicks, or breaths (< 350ms)
@@ -99,6 +100,7 @@ class TurnManagerConfig:
 
     # Pre-speech ring buffer (seconds)
     pre_speech_buffer_sec: float = 0.45    # Preserves initial word onset (e.g. consonants)
+    use_gpu_vad: bool = True               # Enable GPU acceleration for VAD (auto-fallback to CPU)
 
 
 class VoiceTurnManager:
@@ -142,6 +144,17 @@ class VoiceTurnManager:
 
         # Lock / guard to prevent concurrent finalizations
         self._is_finalizing: bool = False
+        self._last_finalize_time: float = 0.0
+
+        # GPU-accelerated VAD engine
+        self._gpu_vad = None
+        if getattr(self.config, "use_gpu_vad", True):
+            try:
+                from app.voice.gpu_vad import get_gpu_vad
+                self._gpu_vad = get_gpu_vad()
+            except Exception as e:
+                logger.debug(f"[VoiceTurnManager] GPU VAD initialization fallback: {e}")
+                self._gpu_vad = None
 
     @property
     def state(self) -> TurnState:
@@ -167,6 +180,12 @@ class VoiceTurnManager:
         """Calculates Root-Mean-Square (RMS) amplitude normalized to [-1.0, 1.0]."""
         if not pcm_chunk:
             return 0.0
+
+        if self._gpu_vad is not None:
+            try:
+                return self._gpu_vad.calculate_metrics(pcm_chunk)[0]
+            except Exception:
+                pass
 
         if _HAS_NUMPY and np is not None:
             try:
@@ -221,14 +240,21 @@ class VoiceTurnManager:
             return {"action": "none", "state": self._state.value}
 
         current_time = now if now is not None else time.time()
-        rms = self.calculate_rms(pcm_chunk)
 
-        # Dynamic speech threshold based on adaptive ambient noise floor
-        speech_threshold = max(
-            self.config.min_rms_threshold,
-            self._noise_floor * self.config.energy_multiplier
-        )
-        is_speech = rms >= speech_threshold
+        # VAD evaluation: GPU accelerated with automatic CPU fallback
+        if self._gpu_vad is not None:
+            is_speech, rms, _ = self._gpu_vad.is_speech(pcm_chunk, self._noise_floor)
+            speech_threshold = max(
+                self.config.min_rms_threshold,
+                self._noise_floor * self.config.energy_multiplier
+            )
+        else:
+            rms = self.calculate_rms(pcm_chunk)
+            speech_threshold = max(
+                self.config.min_rms_threshold,
+                self._noise_floor * self.config.energy_multiplier
+            )
+            is_speech = rms >= speech_threshold
 
         # Update ambient noise floor during non-speech with EMA
         if not is_speech and self._state == TurnState.IDLE_LISTENING:
@@ -236,6 +262,20 @@ class VoiceTurnManager:
                 (1.0 - self.config.noise_floor_alpha) * self._noise_floor
                 + self.config.noise_floor_alpha * rms
             )
+
+        # -------------------------------------------------------------------
+        # Deadlock Prevention: Auto-recover if trapped in DISPATCHED/FINALIZING
+        # -------------------------------------------------------------------
+        if self._state in (TurnState.DISPATCHED, TurnState.FINALIZING):
+            now = current_time
+            elapsed = (now - self._last_finalize_time) if self._last_finalize_time > 0 else 0.0
+            # Auto-rearm if dispatched max duration exceeded OR user speech resumed
+            if (self._last_finalize_time > 0 and elapsed >= self.config.dispatched_max_duration_sec) or (is_speech and elapsed >= 1.2):
+                logger.warning(
+                    f"[VoiceTurnManager] Auto-rearming from locked state '{self._state.value}' "
+                    f"(elapsed={elapsed:.2f}s, is_speech={is_speech})."
+                )
+                self.rearm_after_turn_completion()
 
         # -------------------------------------------------------------------
         # State: IDLE_LISTENING (Standby / Ambient)
@@ -380,6 +420,7 @@ class VoiceTurnManager:
             return {"action": "none", "state": self._state.value}
 
         self._is_finalizing = True
+        self._last_finalize_time = time.time()
         prev_state = self._state
         self._transition_to(TurnState.FINALIZING)
 
@@ -453,6 +494,7 @@ class VoiceTurnManager:
         self._has_explicit_finish = False
         self._cleaned_finish_text = None
         self._is_finalizing = False
+        self._last_finalize_time = 0.0
         self._transition_to(TurnState.IDLE_LISTENING)
 
     def rearm_after_turn_completion(self) -> None:
