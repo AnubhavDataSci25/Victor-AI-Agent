@@ -4,7 +4,8 @@
  * real-time transcript streaming, and Particle Orb synchronization.
  */
 
-const ws = new WebSocket(`ws://${window.location.host}/ws`);
+let ws = null;
+let wsReconnectTimer = null;
 
 // DOM Elements
 const authOverlay = document.getElementById('auth-overlay');
@@ -300,6 +301,18 @@ function playAudioChunk(base64Data) {
 
     isSpeaking = true;
     isVictorSpeaking = true;
+
+    // Safety watchdog: auto-clear speaking lock if source.onended drops
+    const chunkWatchdogMs = Math.ceil((audioBuffer.duration + 0.8) * 1000);
+    setTimeout(() => {
+        const idx = activeAudioSources.indexOf(source);
+        if (idx !== -1) activeAudioSources.splice(idx, 1);
+        if (activeAudioSources.length === 0) {
+            isSpeaking = false;
+            isVictorSpeaking = false;
+        }
+    }, chunkWatchdogMs);
+
     source.onended = () => {
         const idx = activeAudioSources.indexOf(source);
         if (idx !== -1) activeAudioSources.splice(idx, 1);
@@ -822,14 +835,86 @@ function resetPINBoard(showRemainingAttempts = true) {
     }
 }
 
-// Step 1: Input handling & typing numbers invisible with blinking cursor
+// Step 1: Global direct keyboard capture for PIN Gateway
+window.addEventListener('keydown', (e) => {
+    // If auth overlay is hidden, do nothing
+    if (!authOverlay || authOverlay.style.display === 'none') return;
+    if (isLockedOut || isVerifying) return;
+
+    // Reset from error state on any keypress
+    if (verdictTile && verdictTile.classList.contains('verdict-error')) {
+        if (autoResetTimer) {
+            clearTimeout(autoResetTimer);
+            autoResetTimer = null;
+        }
+        resetPINBoard(true);
+    }
+
+    // Handle Backspace & Delete
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        if (enteredPin.length > 0) {
+            enteredPin = enteredPin.slice(0, -1);
+            if (pinHiddenInput) pinHiddenInput.value = enteredPin;
+            updateSlotVisuals();
+        }
+        return;
+    }
+
+    // Handle Enter
+    if (e.key === 'Enter') {
+        if (enteredPin.length === TOTAL_SLOTS) {
+            e.preventDefault();
+            triggerVerification();
+        }
+        return;
+    }
+
+    // Detect numeric key: 0-9 or Numpad 0-9
+    let digit = null;
+    if (/^[0-9]$/.test(e.key)) {
+        digit = e.key;
+    } else if (e.code && /^Numpad[0-9]$/.test(e.code)) {
+        digit = e.code.slice(6);
+    }
+
+    if (digit !== null) {
+        e.preventDefault();
+        if (enteredPin.length < TOTAL_SLOTS) {
+            enteredPin += digit;
+            if (pinHiddenInput) pinHiddenInput.value = enteredPin;
+            updateSlotVisuals();
+
+            // Auto-trigger verification when 6th digit entered
+            if (enteredPin.length === TOTAL_SLOTS) {
+                setTimeout(() => {
+                    if (enteredPin.length === TOTAL_SLOTS && !isVerifying && !isLockedOut) {
+                        triggerVerification();
+                    }
+                }, 80);
+            }
+        }
+        return;
+    }
+});
+
+// Virtual keyboard, paste & autofill fallback for pinHiddenInput
 if (pinHiddenInput) {
     pinHiddenInput.addEventListener('input', () => {
         if (isLockedOut || isVerifying) return;
         const clean = pinHiddenInput.value.replace(/\D/g, '').slice(0, TOTAL_SLOTS);
-        pinHiddenInput.value = clean;
-        enteredPin = clean;
-        updateSlotVisuals();
+        if (clean !== enteredPin) {
+            enteredPin = clean;
+            pinHiddenInput.value = clean;
+            updateSlotVisuals();
+            if (enteredPin.length === TOTAL_SLOTS) {
+                setTimeout(() => {
+                    if (enteredPin.length === TOTAL_SLOTS && !isVerifying && !isLockedOut) {
+                        triggerVerification();
+                    }
+                }, 80);
+            }
+        }
     });
 
     pinHiddenInput.addEventListener('keydown', (e) => {
@@ -840,28 +925,9 @@ if (pinHiddenInput) {
     });
 }
 
-// Instant dismiss / key-capture on error state:
-window.addEventListener('keydown', (e) => {
-    if (isLockedOut) return;
-    if (verdictTile && verdictTile.classList.contains('verdict-error')) {
-        if (autoResetTimer) {
-            clearTimeout(autoResetTimer);
-            autoResetTimer = null;
-        }
-        resetPINBoard(true);
-        if (/^[0-9]$/.test(e.key)) {
-            enteredPin = e.key;
-            if (pinHiddenInput) {
-                pinHiddenInput.value = e.key;
-            }
-            updateSlotVisuals();
-        }
-    }
-});
-
-// Focus / instant reset on click
-if (pinAuthCard) {
-    pinAuthCard.addEventListener('click', (e) => {
+// Click anywhere on auth overlay or card to auto-focus pinHiddenInput
+if (authOverlay) {
+    authOverlay.addEventListener('click', (e) => {
         if (isLockedOut) return;
         if (verdictTile && verdictTile.classList.contains('verdict-error')) {
             if (autoResetTimer) {
@@ -889,7 +955,13 @@ if (pinVerifyBtn) {
 if (verdictTile) {
     verdictTile.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!isLockedOut) {
+        if (isLockedOut) {
+            clearLockoutState();
+            resetPINBoard(true);
+            if (pinStatusText) {
+                pinStatusText.innerHTML = '<span style="color: var(--accent-cyan); font-weight: 500; letter-spacing: 1.5px;">LOCKOUT RESET // ENTER 6-DIGIT PIN</span>';
+            }
+        } else {
             resetPINBoard(true);
         }
     });
@@ -972,7 +1044,7 @@ function stopFirstCommandListener() {
 // ==========================================================================
 // STATE & WEBSOCKET MANAGEMENT
 // ==========================================================================
-ws.onmessage = (event) => {
+function handleWebSocketMessage(event) {
     try {
         const message = JSON.parse(event.data);
 
@@ -1190,16 +1262,79 @@ ws.onmessage = (event) => {
             if (window.DocumentDashboard) {
                 window.DocumentDashboard.handleUpdate(message);
             }
+        } else if (message.type === "phone_alert") {
+            addHudNotification(`Phone (${message.source || 'Alert'})`, message.title ? `${message.title}: ${message.text || ''}` : (message.text || 'New notification'));
+        } else if (message.type === "reminder_notification") {
+            addHudNotification('Reminder', message.message || 'Scheduled reminder triggered');
         }
     } catch (e) {
         console.error("Error parsing WebSocket message:", e);
     }
-};
+}
+
+function setupWebSocket() {
+    if (ws) {
+        try {
+            ws.onclose = null;
+            ws.onerror = null;
+            ws.onmessage = null;
+            ws.close();
+        } catch (_) {}
+    }
+
+    try {
+        ws = new WebSocket(`ws://${window.location.host}/ws`);
+        ws.onmessage = handleWebSocketMessage;
+        ws.onopen = () => {
+            console.log("[Victor WS] Connected to backend.");
+            if (wsReconnectTimer) {
+                clearTimeout(wsReconnectTimer);
+                wsReconnectTimer = null;
+            }
+        };
+        ws.onclose = (event) => {
+            console.warn("[Victor WS] Connection closed. Auto-reconnecting in 2s...", event);
+            if (!wsReconnectTimer) {
+                wsReconnectTimer = setTimeout(() => {
+                    wsReconnectTimer = null;
+                    setupWebSocket();
+                }, 2000);
+            }
+        };
+        ws.onerror = (err) => {
+            console.error("[Victor WS] WebSocket error:", err);
+        };
+    } catch (wsErr) {
+        console.error("[Victor WS] Failed to create WebSocket:", wsErr);
+    }
+}
+
+// Initialize persistent WebSocket
+setupWebSocket();
+
+// Periodic Client Audio & Session Health Watchdog (every 4s)
+setInterval(() => {
+    if (audioCtx) {
+        // Auto-resume AudioContext if suspended while Victor is in active listening states
+        if (audioCtx.state === 'suspended' && (currentState === "ACTIVE" || currentState === "LISTENING")) {
+            console.log("[Victor Health Watchdog] Auto-resuming suspended AudioContext.");
+            audioCtx.resume().catch(() => {});
+        }
+        // Auto-clear stuck isVictorSpeaking lock if all audio sources finished
+        if (isVictorSpeaking && activeAudioSources.length === 0) {
+            console.warn("[Victor Health Watchdog] Auto-clearing orphaned isVictorSpeaking lock.");
+            isVictorSpeaking = false;
+            isSpeaking = false;
+        }
+    }
+}, 4000);
 
 // Lock Terminal button
 if (lockBtn) {
     lockBtn.addEventListener('click', () => {
-        ws.send(JSON.stringify({ type: "lock_request" }));
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "lock_request" }));
+        }
     });
 }
 
@@ -1852,14 +1987,4 @@ if (clearNotifPopoverBtn) {
     });
 }
 
-// Forward incoming WS alerts into the notification popover
-ws.addEventListener('message', (event) => {
-    try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'phone_alert') {
-            addHudNotification(`Phone (${msg.source || 'Alert'})`, msg.title ? `${msg.title}: ${msg.text || ''}` : (msg.text || 'New notification'));
-        } else if (msg.type === 'reminder_notification') {
-            addHudNotification('Reminder', msg.message || 'Scheduled reminder triggered');
-        }
-    } catch (_) {}
-});
+

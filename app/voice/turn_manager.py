@@ -95,8 +95,12 @@ class TurnManagerConfig:
     min_speech_duration_sec: float = 0.35  # Ignore transient pops, clicks, or breaths (< 350ms)
     min_rms_threshold: float = 0.010       # Absolute minimum RMS energy to consider speech
     energy_multiplier: float = 2.4         # Speech threshold = max(min_rms, noise_floor * multiplier)
-    noise_floor_alpha: float = 0.04        # EMA update rate for background ambient noise floor
+    noise_floor_alpha: float = 0.04        # Legacy EMA update rate (kept for compatibility)
+    noise_floor_alpha_up: float = 0.005    # Ultra-slow upward adaptation (prevents ambient noise floor creep)
+    noise_floor_alpha_down: float = 0.04   # Fast downward recovery to quiet baseline
     initial_noise_floor: float = 0.005     # Baseline noise estimate
+    min_noise_floor: float = 0.001         # Minimum noise floor floor clamp
+    max_noise_floor: float = 0.012         # Strict noise floor ceiling to guarantee conversational speech is never locked out
 
     # Pre-speech ring buffer (seconds)
     pre_speech_buffer_sec: float = 0.45    # Preserves initial word onset (e.g. consonants)
@@ -256,11 +260,17 @@ class VoiceTurnManager:
             )
             is_speech = rms >= speech_threshold
 
-        # Update ambient noise floor during non-speech with EMA
+        # Update ambient noise floor during non-speech with asymmetric EMA & strict clamping
         if not is_speech and self._state == TurnState.IDLE_LISTENING:
-            self._noise_floor = (
-                (1.0 - self.config.noise_floor_alpha) * self._noise_floor
-                + self.config.noise_floor_alpha * rms
+            alpha = (
+                self.config.noise_floor_alpha_up
+                if rms > self._noise_floor
+                else self.config.noise_floor_alpha_down
+            )
+            raw_floor = (1.0 - alpha) * self._noise_floor + alpha * rms
+            self._noise_floor = max(
+                self.config.min_noise_floor,
+                min(raw_floor, self.config.max_noise_floor)
             )
 
         # -------------------------------------------------------------------
@@ -294,6 +304,19 @@ class VoiceTurnManager:
                 while self._pre_speech_ring:
                     self._utterance_buffer.extend(self._pre_speech_ring.popleft())
                 self._utterance_buffer.extend(pcm_chunk)
+
+                try:
+                    from app.voice.voice_diagnostics import get_voice_diagnostics, VoiceDiagnosticEvent
+                    get_voice_diagnostics().emit(
+                        VoiceDiagnosticEvent.SPEECH_STARTED,
+                        details={
+                            "rms": round(rms, 4),
+                            "threshold": round(speech_threshold, 4),
+                            "noise_floor": round(self._noise_floor, 4),
+                        }
+                    )
+                except Exception:
+                    pass
 
                 return {
                     "action": "speech_started",
@@ -432,6 +455,20 @@ class VoiceTurnManager:
             f"[VoiceTurnManager] Utterance finalized (reason='{reason}', "
             f"duration={duration_sec:.2f}s, speech={self.speech_duration_sec:.2f}s, bytes={len(final_pcm)})."
         )
+
+        try:
+            from app.voice.voice_diagnostics import get_voice_diagnostics, VoiceDiagnosticEvent
+            get_voice_diagnostics().emit(
+                VoiceDiagnosticEvent.SPEECH_FINALIZED,
+                details={
+                    "reason": reason,
+                    "duration_sec": round(duration_sec, 2),
+                    "speech_duration_sec": round(self.speech_duration_sec, 2),
+                    "bytes": len(final_pcm),
+                }
+            )
+        except Exception:
+            pass
 
         res = {
             "action": "turn_finalized",

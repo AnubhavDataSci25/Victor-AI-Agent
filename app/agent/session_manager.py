@@ -219,15 +219,49 @@ class VictorSessionManager:
         })
 
     async def _inactivity_watchdog(self):
-        """Background coroutine that enforces session timeouts."""
+        """Background coroutine that enforces session timeouts and monitors voice pipeline health."""
+        last_health_log = time.time()
         try:
             while self.state not in (VictorState.LOCKED, VictorState.CLOSED, VictorState.OFFLINE):
-                await asyncio.sleep(10)
-                elapsed = time.time() - self.last_activity_time
+                await asyncio.sleep(5)
+                now = time.time()
+                elapsed = now - self.last_activity_time
                 if elapsed > self.SESSION_TIMEOUT_SECONDS:
                     logger.warning(f"Session timeout exceeded ({self.SESSION_TIMEOUT_SECONDS}s). Auto-locking.")
                     await self.lock()
                     break
+
+                # 1. Stuck THINKING watchdog recovery: unfreeze if no tool is running
+                if self.state == VictorState.THINKING and elapsed > 15.0:
+                    is_executing = hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False)
+                    if not is_executing:
+                        logger.warning(f"[VoiceSessionWatchdog] Session stuck in THINKING for {elapsed:.1f}s. Auto-recovering to ACTIVE.")
+                        if hasattr(self, "turn_manager"):
+                            self.turn_manager.rearm_after_turn_completion()
+                        await self.set_state(VictorState.ACTIVE)
+                        await self.websocket_send_callback({
+                            "type": "orb_state",
+                            "state": "LISTENING"
+                        })
+
+                # 2. Stuck TurnManager watchdog recovery: auto-rearm if trapped in terminal state
+                if hasattr(self, "turn_manager"):
+                    tm = self.turn_manager
+                    if getattr(tm, "state", None) and tm.state.value in ("FINALIZING", "DISPATCHED"):
+                        tm_elapsed = (now - tm._last_finalize_time) if tm._last_finalize_time > 0 else 0.0
+                        if tm_elapsed > tm.config.dispatched_max_duration_sec:
+                            logger.warning(f"[VoiceSessionWatchdog] TurnManager stuck in '{tm.state.value}' for {tm_elapsed:.1f}s. Auto-rearming.")
+                            tm.rearm_after_turn_completion()
+
+                # 3. Periodic voice diagnostics health summary (every 60s)
+                if (now - last_health_log) >= 60.0:
+                    last_health_log = now
+                    try:
+                        from app.voice.voice_diagnostics import get_voice_diagnostics
+                        summary = get_voice_diagnostics().get_health_summary()
+                        logger.info(f"[VoiceSessionWatchdog] Voice health report: {summary}")
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             pass
 
@@ -542,6 +576,24 @@ class VictorSessionManager:
         self.last_activity_time = time.time()  # Reset watchdog on speech
         self._auth_manager.touch_activity()
 
+        # Telemetry: Record incoming frame
+        try:
+            from app.voice.voice_diagnostics import get_voice_diagnostics
+            get_voice_diagnostics().record_frame(len(pcm_chunk))
+        except Exception:
+            pass
+
+        # Auto-reconnect live session if audio is arriving but live session dropped unexpectedly
+        if (
+            hasattr(self, "live_session")
+            and not getattr(self.live_session, "is_connected", False)
+            and not getattr(self.live_session, "is_in_cooldown", False)
+            and self.is_unlocked()
+        ):
+            if not hasattr(self, "_voice_reconnect_task") or self._voice_reconnect_task is None or self._voice_reconnect_task.done():
+                logger.info("[SessionManager] Audio arriving on disconnected LiveSession; auto-reconnecting.")
+                self._voice_reconnect_task = asyncio.create_task(self.live_session.start())
+
         # Pass through VoiceTurnManager for intelligent silence & endpoint management
         if hasattr(self, "turn_manager"):
             self.turn_manager.process_audio(pcm_chunk)
@@ -551,7 +603,7 @@ class VictorSessionManager:
 
     async def handle_audio_stream_end(self):
         """Signal end of user speech stream."""
-        if self.state != VictorState.ACTIVE or self._is_speaking:
+        if self.state not in (VictorState.ACTIVE, VictorState.THINKING, VictorState.LISTENING) or self._is_speaking:
             return
         if hasattr(self, "live_session") and getattr(self.live_session, "_is_executing_tools", False):
             return

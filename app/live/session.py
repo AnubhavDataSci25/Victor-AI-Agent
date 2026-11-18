@@ -459,10 +459,19 @@ class LiveSessionManager:
                                 if hasattr(self.session_manager, "turn_manager"):
                                     self.session_manager.turn_manager.rearm_after_turn_completion()
 
+                                await self.session_manager.set_state(VictorState.ACTIVE)
                                 await self.session_manager.websocket_send_callback({
                                     "type": "orb_state",
                                     "state": "LISTENING"
                                 })
+
+                                try:
+                                    from app.voice.voice_diagnostics import get_voice_diagnostics, VoiceDiagnosticEvent
+                                    diag = get_voice_diagnostics()
+                                    diag.emit(VoiceDiagnosticEvent.RESPONSE_RECEIVED, details={"turn_complete": True})
+                                    diag.emit(VoiceDiagnosticEvent.LISTENING_RESUMED, details={"state": "ACTIVE"})
+                                except Exception:
+                                    pass
 
                     # Handle Tool Calls
                     tool_call = getattr(response, "tool_call", None)
@@ -581,6 +590,22 @@ class LiveSessionManager:
                 if not received_in_turn and self.is_connected:
                     # Prevent tight loop if receive() returns immediately without yielding
                     await asyncio.sleep(0.05)
+
+            # Normal generator completion: WebSocket stream was cleanly closed by the server
+            logger.info("[Live Session] Gemini Live receive stream closed normally. Evaluating background reconnect.")
+            is_unlocked = getattr(self.session_manager, "is_unlocked", None)
+            is_user_active = is_unlocked() if is_unlocked else (hasattr(self.session_manager, "is_authenticated") and self.session_manager.is_authenticated())
+            if is_user_active and not self.is_in_cooldown:
+                logger.info("[Live Session] User session is active; scheduling silent background auto-reconnect.")
+                try:
+                    from app.voice.voice_diagnostics import get_voice_diagnostics, VoiceDiagnosticEvent
+                    get_voice_diagnostics().emit(
+                        VoiceDiagnosticEvent.RECONNECT_ATTEMPT,
+                        details={"trigger": "normal_stream_closure"}
+                    )
+                except Exception:
+                    pass
+                asyncio.create_task(self._reconnect_after_error(silent=True))
 
         except asyncio.CancelledError:
             pass

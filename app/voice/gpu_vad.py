@@ -97,20 +97,22 @@ class GpuVoiceActivityDetector:
                 np_arr = np.frombuffer(pcm_chunk, dtype=np.int16).copy()
                 tensor = self._torch.from_numpy(np_arr).to(self._device, dtype=self._torch.float32) / 32768.0
                 
-                # RMS on GPU
+                # Fast vectorized RMS on GPU
                 rms = float(self._torch.sqrt(self._torch.mean(tensor ** 2)).item())
 
                 # Spectral energy in vocal band (85Hz - 3400Hz) vs total
-                n_samples = len(tensor)
+                # Using robust CPU NumPy FFT to avoid Windows cuFFT OS handle exhaustion (0xc0000008)
+                n_samples = len(np_arr)
                 if n_samples >= 64:
-                    fft_mag = self._torch.abs(self._torch.fft.rfft(tensor))
+                    norm_arr = np_arr.astype(np.float32) / 32768.0
+                    fft_mag = np.abs(np.fft.rfft(norm_arr))
                     if self._vocal_mask is None or self._cached_freq_len != n_samples:
-                        freqs = self._torch.fft.rfftfreq(n_samples, 1.0 / self.sample_rate).to(self._device)
+                        freqs = np.fft.rfftfreq(n_samples, 1.0 / self.sample_rate)
                         self._vocal_mask = (freqs >= 85) & (freqs <= 3400)
                         self._cached_freq_len = n_samples
 
-                    vocal_energy = float(self._torch.sum(fft_mag[self._vocal_mask] ** 2).item())
-                    total_energy = float(self._torch.sum(fft_mag ** 2).item()) + 1e-9
+                    vocal_energy = float(np.sum(fft_mag[self._vocal_mask] ** 2))
+                    total_energy = float(np.sum(fft_mag ** 2)) + 1e-9
                     vocal_ratio = max(0.0, min(1.0, vocal_energy / total_energy))
                 else:
                     vocal_ratio = 1.0
